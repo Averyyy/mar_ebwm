@@ -1,1 +1,5 @@
 pretrained_models/
+data/
+__pycache__/
+output/
+wandb/

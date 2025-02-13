@@ -4,6 +4,7 @@ import os
 import time
 from collections import defaultdict, deque
 from pathlib import Path
+import wandb
 
 import torch
 import torch.distributed as dist
@@ -155,6 +156,15 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
+                wandb.log({
+                    "eta": float(eta_seconds),                    
+                    "loss": float(self.meters["loss"].value),   
+                    "lr": float(self.meters["lr"].value),       
+                    "time": float(iter_time.value),  
+                    "data": float(data_time.value),             # or global_avg
+                    "max_mem": float(torch.cuda.max_memory_allocated() / MB),
+                })
+
             i += 1
             end = time.time()
         total_time = time.time() - start_time
@@ -242,6 +252,13 @@ def init_distributed_mode(args):
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
+    
+    if is_main_process():
+        wandb.init(
+            project="ebwm-mar",
+            config=vars(args),
+            name="ebwm-mar",
+        )
 
 
 class NativeScalerWithGradNormCount:
