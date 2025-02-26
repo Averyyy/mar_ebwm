@@ -1,0 +1,307 @@
+# TODO: use EBTAdaln as the architecture for DiT Blocks of D-DiT (decoder-only DiT)
+# models/ddit.py
+import torch
+import torch.nn as nn
+import numpy as np
+import math
+from functools import partial
+
+from models.ebt.ebt_adaln import EBTAdaLN
+from models.ebt.model_utils import EBTModelArgs
+from diffusion import create_diffusion
+
+
+class TimestepEmbedder(nn.Module):
+    """
+    Embeds scalar timesteps into vector representations.
+    """
+
+    def __init__(self, hidden_size, frequency_embedding_size=256):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True),
+        )
+        self.frequency_embedding_size = frequency_embedding_size
+
+    @staticmethod
+    def timestep_embedding(t, dim, max_period=10000):
+        """
+        Create sinusoidal timestep embeddings.
+        """
+        # Shape: [B, D]
+        half = dim // 2
+        freqs = torch.exp(
+            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
+        ).to(device=t.device)
+        args = t[:, None].float() * freqs[None]
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        if dim % 2:
+            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+        return embedding
+
+    def forward(self, t):
+        # Shape: [B, D]
+        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        t_emb = self.mlp(t_freq)
+        return t_emb
+
+
+class LabelEmbedder(nn.Module):
+    """
+    Embeds class labels into vector representations.
+    Also handles label dropout for classifier-free guidance.
+    """
+
+    def __init__(self, num_classes, hidden_size, dropout_prob):
+        super().__init__()
+        use_cfg_embedding = dropout_prob > 0
+        self.embedding_table = nn.Embedding(num_classes + int(use_cfg_embedding), hidden_size)
+        self.num_classes = num_classes
+        self.dropout_prob = dropout_prob
+
+    def token_drop(self, labels, force_drop_ids=None):
+        """
+        Drops labels to enable classifier-free guidance.
+        """
+        if force_drop_ids is None:
+            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+        else:
+            drop_ids = force_drop_ids == 1
+        labels = torch.where(drop_ids, self.num_classes, labels)
+        return labels
+
+    def forward(self, labels, train, force_drop_ids=None):
+        # Shape: [B, D]
+        use_dropout = self.dropout_prob > 0
+        if (train and use_dropout) or (force_drop_ids is not None):
+            labels = self.token_drop(labels, force_drop_ids)
+        embeddings = self.embedding_table(labels)
+        return embeddings
+
+
+class DDiT(nn.Module):
+    """
+    Decoder-only Diffusion Transformer (DDiT) model.
+    """
+
+    def __init__(
+        self,
+        img_size=256,
+        vae_stride=16,
+        patch_size=1,
+        embed_dim=1024,
+        depth=16,
+        num_heads=16,
+        mlp_ratio=4.0,
+        class_num=1000,
+        dropout_prob=0.1,
+        learn_sigma=True,
+        num_sampling_steps='100',
+        diffusion_batch_mul=1
+    ):
+        super().__init__()
+
+        # Image and patch dimensions
+        self.img_size = img_size
+        self.vae_stride = vae_stride
+        self.patch_size = patch_size
+        self.seq_h = self.seq_w = img_size // vae_stride // patch_size
+        self.seq_len = self.seq_h * self.seq_w
+        self.token_embed_dim = 16 * patch_size**2  # VAE latent dimension * patch size^2
+        self.embed_dim = embed_dim
+        self.out_channels = 16 * 2 if learn_sigma else 16
+        self.diffusion_batch_mul = diffusion_batch_mul
+
+        # Timestep and class embedders
+        self.t_embedder = TimestepEmbedder(embed_dim)
+        self.y_embedder = LabelEmbedder(class_num, embed_dim, dropout_prob)
+
+        # Input and output projections
+        self.input_proj = nn.Linear(self.token_embed_dim, embed_dim, bias=True)
+        self.output_proj = nn.Linear(embed_dim, self.out_channels * patch_size**2, bias=True)
+
+        # Create EBT transformer with AdaLN
+        transformer_args = EBTModelArgs(
+            dim=embed_dim,
+            n_layers=depth,
+            n_heads=num_heads,
+            ffn_dim_multiplier=mlp_ratio,
+            adaln_zero_init=True,
+            max_seq_len=self.seq_len*2  # Need to handle 2x sequence length for real+pred
+        )
+
+        self.transformer = EBTAdaLN(
+            params=transformer_args,
+            max_mcmc_steps=1000  # Placeholder value for EBTAdaLN
+        )
+
+        # Diffusion process
+        self.diffusion = create_diffusion(
+            timestep_respacing=num_sampling_steps,
+            noise_schedule="linear"
+        )
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        # Initialize embedders
+        nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+        # Initialize projections
+        nn.init.xavier_uniform_(self.input_proj.weight)
+        nn.init.constant_(self.input_proj.bias, 0)
+        nn.init.constant_(self.output_proj.weight, 0)
+        nn.init.constant_(self.output_proj.bias, 0)
+
+    def patchify(self, x):
+        """Convert a batch of latent embeddings to patches"""
+        # Input shape: [B, C, H, W], Output shape: [B, S, C*P*P]
+        bsz, c, h, w = x.shape
+        p = self.patch_size
+        h_, w_ = h // p, w // p
+
+        x = x.reshape(bsz, c, h_, p, w_, p)
+        x = torch.einsum('nchpwq->nhwcpq', x)
+        x = x.reshape(bsz, h_ * w_, c * p ** 2)
+        return x
+
+    def unpatchify(self, x):
+        """Convert patches back to a batch of latent embeddings"""
+        # Input shape: [B, S, C*P*P], Output shape: [B, C, H, W]
+        bsz = x.shape[0]
+        p = self.patch_size
+        c = 16  # VAE latent channels
+        h_, w_ = self.seq_h, self.seq_w
+
+        x = x.reshape(bsz, h_, w_, c, p, p)
+        x = torch.einsum('nhwcpq->nchpwq', x)
+        x = x.reshape(bsz, c, h_ * p, w_ * p)
+        return x
+
+    def forward(self, x, t, labels):
+        """
+        Forward pass of DDiT.
+        x: (B, C, H, W) tensor of spatial inputs (latent representations of images)
+        t: (B,) tensor of diffusion timesteps
+        labels: (B,) tensor of class labels
+        """
+        # Patchify the input - [B, S, D_patch]
+        x_patches = self.patchify(x)
+
+        # Project to embedding dimension - [B, S, embed_dim]
+        x_embed = self.input_proj(x_patches)
+
+        # Get timestep and label embeddings
+        t_emb = self.t_embedder(t)  # [B, embed_dim]
+        y_emb = self.y_embedder(labels, self.training)  # [B, embed_dim]
+        time_cond = t_emb + y_emb  # [B, embed_dim]
+
+        # Create input with real tokens followed by predicted tokens (shifted by 1)
+        # Real tokens are the original embeddings - [B, S, embed_dim]
+        real_tokens = x_embed
+
+        # Predicted tokens start as copies but will be modified by the transformer
+        # [B, S, embed_dim]
+        pred_tokens = x_embed.clone()
+
+        # Concatenate to form [real, pred] - [B, 2*S, embed_dim]
+        combined = torch.cat([real_tokens, pred_tokens], dim=1)
+
+        # Use EBTAdaLN transformer which handles the autoregressive masking internally
+        # The mcmc_step parameter is used to provide the diffusion timestep
+        # Output shape: [B, 2*S, embed_dim]
+        transformer_output = self.transformer(combined, start_pos=0, mcmc_step=t[0])
+
+        # Extract only the predicted part - [B, S, embed_dim]
+        pred_output = transformer_output[:, real_tokens.shape[1]:, :]
+
+        # Project back to token space - [B, S, out_channels*patch_size^2]
+        token_preds = self.output_proj(pred_output)
+
+        # Reshape and unpatchify to get the final output - [B, C, H, W]
+        final_output = self.unpatchify(token_preds)
+
+        return final_output
+
+    def forward_with_cfg(self, x, t, labels, cfg_scale):
+        """
+        Forward pass with classifier-free guidance.
+        """
+        # For classifier-free guidance, run the model twice
+        half = x[: len(x) // 2]
+        combined = torch.cat([half, half], dim=0)
+        t_combined = torch.cat([t[:len(t)//2], t[:len(t)//2]], dim=0)
+
+        # Conditional and unconditional labels
+        labels_cond = labels[:len(labels)//2]
+        # Create unconditional labels (set to class num which is reserved for null class)
+        labels_uncond = torch.full_like(labels_cond, self.y_embedder.num_classes)
+        labels_combined = torch.cat([labels_cond, labels_uncond], dim=0)
+
+        # Forward pass
+        model_output = self.forward(combined, t_combined, labels_combined)
+
+        # Split conditional and unconditional outputs
+        model_output_cond, model_output_uncond = torch.split(model_output, len(model_output) // 2, dim=0)
+
+        # Apply classifier-free guidance formula
+        guided_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
+
+        return guided_output
+
+    def training_losses(self, x_start, t, labels):
+        """
+        Compute training losses for DDiT.
+        """
+        # Add noise to the input according to the noise schedule
+        noise = torch.randn_like(x_start)
+        x_t = self.diffusion.q_sample(x_start, t, noise=noise)
+
+        # Forward through model
+        model_output = self.forward(x_t, t, labels)
+
+        # Use diffusion loss
+        loss_dict = self.diffusion.training_losses(
+            model=lambda *args, **kwargs: self(*args, **kwargs),
+            x_start=x_start,
+            t=t,
+            model_kwargs={"labels": labels}
+        )
+
+        return loss_dict["loss"], model_output
+
+    def sample(self, shape, labels, cfg_scale=1.0, device=None):
+        """
+        Sample from the model using diffusion sampling.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        # Start with random noise
+        img = torch.randn(*shape, device=device)
+
+        # Define model function
+        def model_fn(x, ts, **kwargs):
+            if cfg_scale > 1.0:
+                half_shape = list(x.shape)
+                half_shape[0] = half_shape[0] // 2
+                x_in = torch.cat([x[:half_shape[0]], x[:half_shape[0]]], dim=0)
+                t_in = torch.cat([ts[:half_shape[0]], ts[:half_shape[0]]], dim=0)
+                return self.forward_with_cfg(x_in, t_in, labels, cfg_scale)
+            else:
+                return self.forward(x, ts, labels)
+
+        # Sample using diffusion
+        samples = self.diffusion.p_sample_loop(
+            model_fn,
+            shape,
+            noise=img,
+            device=device,
+            progress=True
+        )
+
+        return samples
