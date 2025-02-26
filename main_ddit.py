@@ -161,14 +161,19 @@ def train_one_epoch(
 
             # Normalize latents
             latents = posterior.sample().mul_(0.18215)
-
+        if hasattr(model, 'module'):
+            num_timesteps = model.module.diffusion.num_timesteps
+        else:
+            num_timesteps = model.diffusion.num_timesteps
         # Get random timestep
-        t = torch.randint(0, model.diffusion.num_timesteps, (samples.shape[0],), device=device)
-
+        t = torch.randint(0, num_timesteps, (samples.shape[0],), device=device)
+        print("latents shape: {}, t shape: {}, labels shape:{}".format(latents.shape, t.shape, labels.shape))
         # Forward pass and loss calculation
         with torch.cuda.amp.autocast():
-            loss, _ = model.training_losses(latents, t, labels)
-
+            if hasattr(model, 'module'):
+                loss, _ = model.module.training_losses(latents, t, labels)
+            else:
+                loss, _ = model.training_losses(latents, t, labels)
         # Log loss value
         loss_value = loss.item()
         if not np.isfinite(loss_value):

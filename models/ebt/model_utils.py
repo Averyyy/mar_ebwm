@@ -1,9 +1,9 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-import pytorch_lightning as L
+# import pytorch_lightning as L
 import torch.optim as optim
-from torchmetrics import Accuracy
+# from torchmetrics import Accuracy
 import traceback
 from torchvision.transforms import functional as TF
 import torchvision.models as models
@@ -35,6 +35,8 @@ class EBTModelArgs:
     ebt_norm: str = "rms"
     ebt_act_func: str = "silu"
     weight_initialization_gain: float = 1.0
+    final_output_dim: int = 1
+
 
 model_sizes = { # small -> xl same as mamba https://arxiv.org/pdf/2312.00752
     "4xs": {

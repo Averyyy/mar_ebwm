@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from model_utils import *
+from .model_utils import *
 
 
 class RMSNorm(torch.nn.Module):

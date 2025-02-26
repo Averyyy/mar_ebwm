@@ -110,7 +110,8 @@ class DDiT(nn.Module):
         self.seq_len = self.seq_h * self.seq_w
         self.token_embed_dim = 16 * patch_size**2  # VAE latent dimension * patch size^2
         self.embed_dim = embed_dim
-        self.out_channels = 16 * 2 if learn_sigma else 16
+        # self.out_channels = 16 * 2 if learn_sigma else 16
+        self.out_channels = 32
         self.diffusion_batch_mul = diffusion_batch_mul
 
         # Timestep and class embedders
@@ -128,7 +129,8 @@ class DDiT(nn.Module):
             n_heads=num_heads,
             ffn_dim_multiplier=mlp_ratio,
             adaln_zero_init=True,
-            max_seq_len=self.seq_len*2  # Need to handle 2x sequence length for real+pred
+            max_seq_len=self.seq_len*2,  # Need to handle 2x sequence length for real+pred
+            final_output_dim=embed_dim,  # Output dimension of ebt
         )
 
         self.transformer = EBTAdaLN(
@@ -173,7 +175,7 @@ class DDiT(nn.Module):
         # Input shape: [B, S, C*P*P], Output shape: [B, C, H, W]
         bsz = x.shape[0]
         p = self.patch_size
-        c = 16  # VAE latent channels
+        c = self.out_channels  # VAE latent dimension
         h_, w_ = self.seq_h, self.seq_w
 
         x = x.reshape(bsz, h_, w_, c, p, p)
@@ -216,10 +218,10 @@ class DDiT(nn.Module):
         transformer_output = self.transformer(combined, start_pos=0, mcmc_step=t[0])
 
         # Extract only the predicted part - [B, S, embed_dim]
-        pred_output = transformer_output[:, real_tokens.shape[1]:, :]
+        # pred_output = transformer_output[:, real_tokens.shape[1]:, :]
 
         # Project back to token space - [B, S, out_channels*patch_size^2]
-        token_preds = self.output_proj(pred_output)
+        token_preds = self.output_proj(transformer_output)
 
         # Reshape and unpatchify to get the final output - [B, C, H, W]
         final_output = self.unpatchify(token_preds)
@@ -270,6 +272,7 @@ class DDiT(nn.Module):
             t=t,
             model_kwargs={"labels": labels}
         )
+        print("loss_dict", loss_dict)
 
         return loss_dict["loss"], model_output
 

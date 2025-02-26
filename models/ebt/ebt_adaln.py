@@ -6,7 +6,7 @@ from torch.nn import functional as F
 import math
 from typing import Optional, Tuple
 
-from model_utils import *
+from .model_utils import *
 
 
 class RMSNorm(torch.nn.Module):
@@ -522,9 +522,9 @@ class FinalLayer(nn.Module):
     The final layer of EBT when using adaLN.
     """
 
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size, output_dim=1): # default output for energy
         super().__init__()
-        self.linear = nn.Linear(hidden_size, 1, bias=False)
+        self.linear = nn.Linear(hidden_size, output_dim, bias=False)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
@@ -574,7 +574,7 @@ class EBTAdaLN(nn.Module):
 
         self.time_embeddings = nn.Embedding(max_mcmc_steps, params.dim)
 
-        self.final_layer = FinalLayer(params.dim)
+        self.final_layer = FinalLayer(params.dim, params.final_output_dim)
         if params.adaln_zero_init:
             nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
@@ -625,6 +625,6 @@ class EBTAdaLN(nn.Module):
                 embeddings = layer(embeddings, start_pos, freqs_cis, mask, time_embeddings)
             embeddings = self.norm(embeddings)
             energies = self.final_layer(embeddings, time_embeddings)
-
+            print(energies.shape)
             energies = energies[:, embeddings.shape[1] // 2:]
             return energies
