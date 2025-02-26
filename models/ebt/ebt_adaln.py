@@ -625,6 +625,5 @@ class EBTAdaLN(nn.Module):
                 embeddings = layer(embeddings, start_pos, freqs_cis, mask, time_embeddings)
             embeddings = self.norm(embeddings)
             energies = self.final_layer(embeddings, time_embeddings)
-            print(energies.shape)
             energies = energies[:, embeddings.shape[1] // 2:]
             return energies

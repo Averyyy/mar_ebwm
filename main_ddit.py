@@ -25,10 +25,21 @@ from models.vae import AutoencoderKL, DiagonalGaussianDistribution
 from models.ddit import DDiT
 import copy
 
+def update_ema(target_params, source_params, rate=0.99):
+    """
+    Update target parameters to be closer to those of source parameters using
+    an exponential moving average.
+
+    :param target_params: the target parameter sequence.
+    :param source_params: the source parameter sequence.
+    :param rate: the EMA rate (closer to 1 means slower).
+    """
+    for targ, src in zip(target_params, source_params):
+        targ.detach().mul_(rate).add_(src, alpha=1 - rate)
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DDiT training', add_help=False)
-    parser.add_argument('--batch_size', default=16, type=int,
+    parser.add_argument('--batch_size', default=8, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * # gpus')
     parser.add_argument('--epochs', default=400, type=int)
 
@@ -167,7 +178,7 @@ def train_one_epoch(
             num_timesteps = model.diffusion.num_timesteps
         # Get random timestep
         t = torch.randint(0, num_timesteps, (samples.shape[0],), device=device)
-        print("latents shape: {}, t shape: {}, labels shape:{}".format(latents.shape, t.shape, labels.shape))
+        # print("latents shape: {}, t shape: {}, labels shape:{}".format(latents.shape, t.shape, labels.shape))
         # Forward pass and loss calculation
         with torch.cuda.amp.autocast():
             if hasattr(model, 'module'):
@@ -175,20 +186,19 @@ def train_one_epoch(
             else:
                 loss, _ = model.training_losses(latents, t, labels)
         # Log loss value
-        loss_value = loss.item()
+        loss_value = loss.mean().item()
         if not np.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
 
         # Backpropagation
-        loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True)
+        loss_scaler(loss.mean(), optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True)
         optimizer.zero_grad()
 
         # Make sure processes are synced
         torch.cuda.synchronize()
 
-        # Update exponential moving average parameters
-        misc.update_ema(ema_params, model_params, rate=args.ema_rate)
+        update_ema(ema_params, model_params, rate=args.ema_rate)
 
         # Update metrics
         metric_logger.update(loss=loss_value)

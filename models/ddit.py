@@ -272,7 +272,6 @@ class DDiT(nn.Module):
             t=t,
             model_kwargs={"labels": labels}
         )
-        print("loss_dict", loss_dict)
 
         return loss_dict["loss"], model_output
 

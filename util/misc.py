@@ -257,7 +257,7 @@ def init_distributed_mode(args):
         wandb.init(
             project="ebwm-mar",
             config=vars(args),
-            name="ebwm-mar",
+            name="ddit",
         )
 
 
