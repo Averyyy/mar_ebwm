@@ -4,10 +4,10 @@
 #SBATCH --time=02:00:00
 #SBATCH --mem-bind=verbose,local
 #SBATCH --gpu-bind=verbose,closest
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --mem-per-cpu=3G
 #SBATCH --cpus-per-task=64
-#SBATCH --gpus-per-node=4
+#SBATCH --gpus-per-node=1
 #SBATCH --job-name=mar_ebwm_exp-11
 #SBATCH --output=/work/hdd/bdta/aqian1/distillEBWM/logs/experiment.out
 #SBATCH --error=/work/hdd/bdta/aqian1/distillEBWM/logs/experiment.err
