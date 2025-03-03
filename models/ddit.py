@@ -135,7 +135,7 @@ class DDiT(nn.Module):
 
         self.transformer = EBTAdaLN(
             params=transformer_args,
-            max_mcmc_steps=1000  # Placeholder value for EBTAdaLN
+            max_mcmc_steps=None  # Placeholder value for EBTAdaLN
         )
 
         # Diffusion process
@@ -199,7 +199,7 @@ class DDiT(nn.Module):
         # Get timestep and label embeddings
         t_emb = self.t_embedder(t)  # [B, embed_dim]
         y_emb = self.y_embedder(labels, self.training)  # [B, embed_dim]
-        time_cond = t_emb + y_emb  # [B, embed_dim]
+        c = t_emb + y_emb  # [B, embed_dim]
 
         # Create input with real tokens followed by predicted tokens (shifted by 1)
         # Real tokens are the original embeddings - [B, S, embed_dim]
@@ -213,9 +213,8 @@ class DDiT(nn.Module):
         combined = torch.cat([real_tokens, pred_tokens], dim=1)
 
         # Use EBTAdaLN transformer which handles the autoregressive masking internally
-        # The mcmc_step parameter is used to provide the diffusion timestep
         # Output shape: [B, 2*S, embed_dim]
-        transformer_output = self.transformer(combined, start_pos=0, mcmc_step=t[0])
+        transformer_output = self.transformer(combined, start_pos=0, mcmc_step=None, c=c)
 
         # Extract only the predicted part - [B, S, embed_dim]
         # pred_output = transformer_output[:, real_tokens.shape[1]:, :]
@@ -258,22 +257,20 @@ class DDiT(nn.Module):
         """
         Compute training losses for DDiT.
         """
-        # Add noise to the input according to the noise schedule
-        noise = torch.randn_like(x_start)
-        x_t = self.diffusion.q_sample(x_start, t, noise=noise)
-
+        
         # Forward through model
-        model_output = self.forward(x_t, t, labels)
-
+        # model_output = self.forward(x_t, t, labels)
+        def model_fn(x, t, **kwargs):
+            return self.forward(x, t, kwargs.get("labels"))
         # Use diffusion loss
         loss_dict = self.diffusion.training_losses(
-            model=lambda *args, **kwargs: self(*args, **kwargs),
+            model=model_fn,
             x_start=x_start,
             t=t,
             model_kwargs={"labels": labels}
         )
 
-        return loss_dict["loss"], model_output
+        return loss_dict["loss"]
 
     def sample(self, shape, labels, cfg_scale=1.0, device=None):
         """

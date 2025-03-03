@@ -39,7 +39,7 @@ def update_ema(target_params, source_params, rate=0.99):
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DDiT training', add_help=False)
-    parser.add_argument('--batch_size', default=8, type=int,
+    parser.add_argument('--batch_size', default=16, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * # gpus')
     parser.add_argument('--epochs', default=400, type=int)
 
@@ -137,6 +137,8 @@ def get_args_parser():
                         help='Use cached latents')
     parser.set_defaults(use_cached=False)
     parser.add_argument('--cached_path', default='', help='path to cached latents')
+    
+    parser.add_argument('--run_name', default='ddit', help='name of the run for logging')
 
     return parser
 
@@ -156,7 +158,7 @@ def train_one_epoch(
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        # Adjust learning rate
+        # Adjust learning rate using the original mar scheduler
         adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
 
         samples = samples.to(device, non_blocking=True)
@@ -171,7 +173,7 @@ def train_one_epoch(
                 posterior = vae.encode(samples)
 
             # Normalize latents
-            latents = posterior.sample().mul_(0.18215)
+            latents = posterior.sample().mul_(0.2325)
         if hasattr(model, 'module'):
             num_timesteps = model.module.diffusion.num_timesteps
         else:
@@ -182,9 +184,9 @@ def train_one_epoch(
         # Forward pass and loss calculation
         with torch.cuda.amp.autocast():
             if hasattr(model, 'module'):
-                loss, _ = model.module.training_losses(latents, t, labels)
+                loss = model.module.training_losses(latents, t, labels)
             else:
-                loss, _ = model.training_losses(latents, t, labels)
+                loss = model.training_losses(latents, t, labels)
         # Log loss value
         loss_value = loss.mean().item()
         if not np.isfinite(loss_value):

@@ -571,8 +571,8 @@ class EBTAdaLN(nn.Module):
         self.freqs_cis = precompute_freqs_cis(
             self.params.dim // self.params.n_heads, self.params.max_seq_len
         )
-
-        self.time_embeddings = nn.Embedding(max_mcmc_steps, params.dim)
+        if max_mcmc_steps is not None:
+            self.time_embeddings = nn.Embedding(max_mcmc_steps, params.dim)
 
         self.final_layer = FinalLayer(params.dim, params.final_output_dim)
         if params.adaln_zero_init:
@@ -582,7 +582,7 @@ class EBTAdaLN(nn.Module):
         else:
             init_whole_model_weights(self.final_layer.linear, self.params.weight_initialization)
 
-    def forward(self, embeddings: torch.Tensor, start_pos: int, mcmc_step=0):
+    def forward(self, embeddings: torch.Tensor, start_pos: int, mcmc_step=None, c=None):
         """
         Perform a forward pass through the Transformer model.
 
@@ -598,9 +598,17 @@ class EBTAdaLN(nn.Module):
         seqlen = (seqlen+2) // 2  # do this since passed in seqlen is 2(S-1) so add 2 div 2 = S
         self.freqs_cis = self.freqs_cis.to(embeddings.device)
         freqs_cis = self.freqs_cis[start_pos: start_pos + seqlen]
-        mcmc_step = torch.full(size=(_bsz,), fill_value=mcmc_step, device=embeddings.device, dtype=torch.long)
-        time_embeddings = self.time_embeddings(mcmc_step)
-
+        
+        time_embeddings = None
+        if mcmc_step is not None:
+            mcmc_step = torch.full(size=(_bsz,), fill_value=mcmc_step, device=embeddings.device, dtype=torch.long)
+            time_embeddings = self.time_embeddings(mcmc_step)
+        
+        if c is not None:
+            time_embeddings =  c
+            
+        assert time_embeddings is not None, "Either c or mcmc_step must be provided for time embeddings."
+            
         mask = None
         if seqlen > 1:
             mask = torch.full(
