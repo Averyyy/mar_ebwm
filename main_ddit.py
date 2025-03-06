@@ -174,29 +174,23 @@ def train_one_epoch(
 
             # Normalize latents
             latents = posterior.sample().mul_(0.2325)
-        if hasattr(model, 'module'):
-            num_timesteps = model.module.diffusion.num_timesteps
-        else:
-            num_timesteps = model.diffusion.num_timesteps
-        # Get random timestep
-        t = torch.randint(0, num_timesteps, (samples.shape[0],), device=device)
-        # print("latents shape: {}, t shape: {}, labels shape:{}".format(latents.shape, t.shape, labels.shape))
-        # Forward pass and loss calculation
+            
         with torch.cuda.amp.autocast():
             if hasattr(model, 'module'):
-                loss = model.module.training_losses(latents, t, labels)
+                loss = model.module(latents,labels)
             else:
-                loss = model.training_losses(latents, t, labels)
+                loss = model(latents, labels)
         # Log loss value
         loss_value = loss.mean().item()
         if not np.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
-
+        if hasattr(model, 'module') and model.module.output_proj.weight.grad is not None:
+            print(f"Gradient norm: {torch.norm(model.module.output_proj.weight.grad)}")
         # Backpropagation
         loss_scaler(loss.mean(), optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True)
         optimizer.zero_grad()
-
+        
         # Make sure processes are synced
         torch.cuda.synchronize()
 

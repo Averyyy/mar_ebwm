@@ -522,7 +522,7 @@ class FinalLayer(nn.Module):
     The final layer of EBT when using adaLN.
     """
 
-    def __init__(self, hidden_size, output_dim=1): # default output for energy
+    def __init__(self, hidden_size, output_dim=1): # default output for energy, different for ddit
         super().__init__()
         self.linear = nn.Linear(hidden_size, output_dim, bias=False)
         self.adaLN_modulation = nn.Sequential(
