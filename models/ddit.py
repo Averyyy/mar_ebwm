@@ -1,4 +1,3 @@
-# TODO: use EBTAdaln as the architecture for DiT Blocks of D-DiT (decoder-only DiT)
 import torch
 import torch.nn as nn
 import numpy as np
@@ -165,29 +164,32 @@ class DDiT(nn.Module):
             model=self._forward_impl,
             x_start=x_start,
             t=t,
-            model_kwargs={"labels": labels}
+            model_kwargs={"x_start": x_start, "labels": labels,},
         )
         
         return loss_dict["loss"]
 
-    def _forward_impl(self, x, t, labels):
+    def _forward_impl(self, x, t, x_start, labels):
         """
         returns ebt output 
         """
-        # Patchify the input (x_t) - [B, S, D_patch]
-        x_patches = self.patchify(x)
+        # Patchify the input x_t, gt - [B, S, D_patch]
+        x_start_patches = self.patchify(x_start)
+        x_t_patches = self.patchify(x)
+
 
         # Project to embedding dim - [B, S, embed_dim]
-        x_embed = self.input_proj(x_patches)
+        x_start_embed = self.input_proj(x_start_patches)
+        x_t_embed = self.input_proj(x_t_patches)
 
-        # Get timestep and class embeddings
-        t_emb = self.t_embedder(t)  # [B, embed_dim]
-        y_emb = self.y_embedder(labels)  # [B, embed_dim]
+        # Get timestep and class embeddings - [B, embed_dim]
+        t_emb = self.t_embedder(t)
+        y_emb = self.y_embedder(labels)
         c = t_emb + y_emb  # [B, embed_dim]
 
         # Create input with real tokens followed by predicted tokens
-        real_tokens = x_embed
-        pred_tokens = x_embed.clone()
+        real_tokens = x_start_embed.clone()
+        pred_tokens = x_t_embed.clone()
         combined = torch.cat([real_tokens, pred_tokens], dim=1)
 
         # Forward pass through ebt
