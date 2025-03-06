@@ -61,12 +61,12 @@ class DDiT(nn.Module):
         embed_dim=1024,
         depth=16,
         num_heads=16,
-        mlp_ratio=4.0,
+        mlp_ratio=4.,
         class_num=1000,
         dropout_prob=0.1,
-        learn_sigma=True,
+        learn_sigma=False,
         num_sampling_steps='100',
-        diffusion_batch_mul=1
+        diffusion_batch_mul=4,
     ):
         super().__init__()
 
@@ -84,9 +84,15 @@ class DDiT(nn.Module):
         # Timestep and class embedders
         self.t_embedder = TimestepEmbedder(embed_dim)
         self.y_embedder = nn.Embedding(class_num, embed_dim)
+        
+        # pos embed learnable
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.seq_len, embed_dim))
+        self.pos_embed_pred = nn.Parameter(torch.zeros(1, self.seq_len, embed_dim))
 
         self.input_proj = nn.Linear(self.token_embed_dim, embed_dim, bias=True)
         self.output_proj = nn.Linear(embed_dim, self.out_channels * patch_size**2, bias=True)
+        
+        self.dropout_prob = dropout_prob
 
         # Create EBT transformer with AdaLN
         transformer_args = EBTModelArgs(
@@ -118,6 +124,10 @@ class DDiT(nn.Module):
         nn.init.normal_(self.y_embedder.weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+        # Initialize positional embeddings
+        nn.init.normal_(self.pos_embed, std=0.02)
+        nn.init.normal_(self.pos_embed_pred, std=0.02)
 
         # Initialize projections
         nn.init.xavier_uniform_(self.input_proj.weight)
@@ -181,12 +191,20 @@ class DDiT(nn.Module):
         # Project to embedding dim - [B, S, embed_dim]
         x_start_embed = self.input_proj(x_start_patches)
         x_t_embed = self.input_proj(x_t_patches)
+        
+        x_start_embed = x_start_embed + self.pos_embed
+        x_t_embed = x_t_embed + self.pos_embed_pred
 
         # Get timestep and class embeddings - [B, embed_dim]
         t_emb = self.t_embedder(t)
+
+        
+        if self.training and self.dropout_prob > 0:
+            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+            labels = torch.where(drop_ids, torch.ones_like(labels) * self.y_embedder.num_embeddings - 1, labels)
+        
         y_emb = self.y_embedder(labels)
         c = t_emb + y_emb  # [B, embed_dim]
-
         # Create input with real tokens followed by predicted tokens
         real_tokens = x_start_embed.clone()
         pred_tokens = x_t_embed.clone()

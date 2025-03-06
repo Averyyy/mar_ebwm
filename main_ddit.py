@@ -501,6 +501,15 @@ def main(args):
         evaluate(model_without_ddp, vae, ema_params, args, 0, batch_size=args.eval_bsz, log_writer=log_writer,
                  cfg=args.cfg, use_ema=True)
         return
+        
+        # 使用处理后的潜变量调用模型
+        with torch.cuda.amp.autocast():
+            if hasattr(model, 'module'):
+                initial_loss = model.module(x, labels)
+            else:
+                initial_loss = model(x, labels)
+        # initial_loss_value = initial_loss.item()
+        print(f"Initial loss: {initial_loss}")
 
     # Main training loop
     print(f"Start training for {args.epochs} epochs")
