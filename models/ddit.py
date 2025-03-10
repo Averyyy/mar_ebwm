@@ -177,7 +177,7 @@ class DDiT(nn.Module):
             model_kwargs={"x_start": x_start, "labels": labels,},
         )
         
-        return loss_dict["loss"]
+        return loss_dict["loss"].mean()
 
     def _forward_impl(self, x, t, x_start, labels):
         """
@@ -209,7 +209,7 @@ class DDiT(nn.Module):
         real_tokens = x_start_embed.clone()
         pred_tokens = x_t_embed.clone()
         combined = torch.cat([real_tokens, pred_tokens], dim=1)
-
+        
         # Forward pass through ebt
         transformer_output = self.transformer(combined, start_pos=0, mcmc_step=None, c=c)
 

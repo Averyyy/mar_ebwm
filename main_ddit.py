@@ -181,7 +181,7 @@ def train_one_epoch(
             else:
                 loss = model(latents, labels)
         # Log loss value
-        loss_value = loss.mean().item()
+        loss_value = loss.item()
         if not np.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)

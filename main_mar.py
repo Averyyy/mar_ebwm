@@ -17,7 +17,6 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.loader import CachedFolder
 
 from models.vae import AutoencoderKL
-from models import mar
 from engine_mar import train_one_epoch, evaluate
 import copy
 
@@ -129,6 +128,23 @@ def get_args_parser():
                         help='Use cached latents')
     parser.set_defaults(use_cached=False)
     parser.add_argument('--cached_path', default='', help='path to cached latents')
+    
+    # ddit selection
+    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit'],
+                        help="Type of model to run ('mar' for MAR or 'ddit' for DDiT)")
+
+    # DDiT-specific parameters (only used if --model_type ddit is specified)
+    parser.add_argument('--run_name', default='ddit', help='name of the run for logging')
+    parser.add_argument('--embed_dim', default=1024, type=int,
+                        help='[DDiT] Embedding dimension')
+    parser.add_argument('--depth', default=16, type=int,
+                        help='[DDiT] Number of transformer layers')
+    parser.add_argument('--num_heads', default=16, type=int,
+                        help='[DDiT] Number of attention heads')
+    parser.add_argument('--mlp_ratio', default=4.0, type=float,
+                        help='[DDiT] MLP hidden dim expansion ratio')
+    parser.add_argument('--learn_sigma', action='store_true',
+                        help='[DDiT] Whether to learn the noise prediction sigma')
 
     return parser
 
@@ -189,23 +205,42 @@ def main(args):
     for param in vae.parameters():
         param.requires_grad = False
 
-    model = mar.__dict__[args.model](
-        img_size=args.img_size,
-        vae_stride=args.vae_stride,
-        patch_size=args.patch_size,
-        vae_embed_dim=args.vae_embed_dim,
-        mask_ratio_min=args.mask_ratio_min,
-        label_drop_prob=args.label_drop_prob,
-        class_num=args.class_num,
-        attn_dropout=args.attn_dropout,
-        proj_dropout=args.proj_dropout,
-        buffer_size=args.buffer_size,
-        diffloss_d=args.diffloss_d,
-        diffloss_w=args.diffloss_w,
-        num_sampling_steps=args.num_sampling_steps,
-        diffusion_batch_mul=args.diffusion_batch_mul,
-        grad_checkpointing=args.grad_checkpointing,
-    )
+
+    if args.model_type == "ddit":
+        from models.ddit import DDiT  # import the DDiT model
+        model = DDiT(
+            img_size=args.img_size,
+            vae_stride=args.vae_stride,
+            patch_size=args.patch_size,
+            embed_dim=args.embed_dim,            # new argument for DDiT
+            depth=args.depth,                    # new argument for DDiT
+            num_heads=args.num_heads,            # new argument for DDiT
+            mlp_ratio=args.mlp_ratio,            # new argument for DDiT
+            class_num=args.class_num,
+            dropout_prob=args.attn_dropout,      # you can reuse (--dropout_prob) if appropriate
+            learn_sigma=args.learn_sigma,        # new argument for DDiT
+            num_sampling_steps=args.num_sampling_steps,
+            diffusion_batch_mul=args.diffusion_batch_mul
+        )
+    else:
+        from models import mar
+        model = mar.__dict__[args.model](
+            img_size=args.img_size,
+            vae_stride=args.vae_stride,
+            patch_size=args.patch_size,
+            vae_embed_dim=args.vae_embed_dim,
+            mask_ratio_min=args.mask_ratio_min,
+            label_drop_prob=args.label_drop_prob,
+            class_num=args.class_num,
+            attn_dropout=args.attn_dropout,
+            proj_dropout=args.proj_dropout,
+            buffer_size=args.buffer_size,
+            diffloss_d=args.diffloss_d,
+            diffloss_w=args.diffloss_w,
+            num_sampling_steps=args.num_sampling_steps,
+            diffusion_batch_mul=args.diffusion_batch_mul,
+            grad_checkpointing=args.grad_checkpointing,
+        )
 
     print("Model = %s" % str(model))
     # following timm: set wd as 0 for bias and norm layers
