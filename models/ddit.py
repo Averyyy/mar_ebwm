@@ -100,7 +100,7 @@ class DDiT(nn.Module):
             n_layers=depth,
             n_heads=num_heads,
             ffn_dim_multiplier=mlp_ratio,
-            adaln_zero_init=True,
+            adaln_zero_init=False,
             max_seq_len=self.seq_len*2,
             final_output_dim=embed_dim,
         )
@@ -132,7 +132,7 @@ class DDiT(nn.Module):
         # Initialize projections
         nn.init.xavier_uniform_(self.input_proj.weight)
         nn.init.constant_(self.input_proj.bias, 0)
-        nn.init.constant_(self.output_proj.weight, 0)
+        nn.init.xavier_uniform_(self.output_proj.weight, 0)
         nn.init.constant_(self.output_proj.bias, 0)
 
     def patchify(self, x):

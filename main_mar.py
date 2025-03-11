@@ -19,6 +19,7 @@ from util.loader import CachedFolder
 from models.vae import AutoencoderKL
 from engine_mar import train_one_epoch, evaluate
 import copy
+import wandb
 
 
 def get_args_parser():
@@ -220,7 +221,7 @@ def main(args):
             dropout_prob=args.attn_dropout,      # you can reuse (--dropout_prob) if appropriate
             learn_sigma=args.learn_sigma,        # new argument for DDiT
             num_sampling_steps=args.num_sampling_steps,
-            diffusion_batch_mul=args.diffusion_batch_mul
+            diffusion_batch_mul=args.diffusion_batch_mul,
         )
     else:
         from models import mar
@@ -251,7 +252,7 @@ def main(args):
     model_without_ddp = model
 
     eff_batch_size = args.batch_size * misc.get_world_size()
-
+    
     if args.lr is None:  # only base_lr is specified
         args.lr = args.blr * eff_batch_size / 256
 
@@ -331,6 +332,8 @@ def main(args):
         if misc.is_main_process():
             if log_writer is not None:
                 log_writer.flush()
+            print('logging the wandb gradients')
+            wandb.watch(model, log='all', log_freq=100)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
