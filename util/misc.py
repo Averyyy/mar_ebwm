@@ -156,6 +156,7 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
+            if "loss" in self.meters:
                 wandb.log({
                     "eta": float(eta_seconds),                    
                     "loss": float(self.meters["loss"].value),   
@@ -254,11 +255,12 @@ def init_distributed_mode(args):
     setup_for_distributed(args.rank == 0)
     
     if is_main_process():
-        wandb.init(
-            project="ebwm-mar",
-            config=vars(args),
-            name=args.run_name,
-        )
+        if hasattr(args, 'run_name') and args.run_name is not None:
+            wandb.init(
+                project="ebwm-mar",
+                config=vars(args),
+                name=args.run_name,
+            )
 
 
 class NativeScalerWithGradNormCount:

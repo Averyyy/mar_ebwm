@@ -328,6 +328,12 @@ class MAR(nn.Module):
         tokens = self.unpatchify(tokens)
         return tokens
 
+def mar_2xs(**kwargs):
+    model = MAR(
+        encoder_embed_dim=384, encoder_depth=3, encoder_num_heads=6,
+        decoder_embed_dim=384, decoder_depth=3, decoder_num_heads=6,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    return model
 
 def mar_base(**kwargs):
     model = MAR(
