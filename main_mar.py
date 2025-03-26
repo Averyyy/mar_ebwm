@@ -292,11 +292,11 @@ def main(args):
         print("Training from scratch")
 
     # evaluate FID and IS
-    if args.evaluate:
-        torch.cuda.empty_cache()
-        evaluate(model_without_ddp, vae, ema_params, args, 0, batch_size=args.eval_bsz, log_writer=log_writer,
-                 cfg=args.cfg, use_ema=True)
-        return
+    # if args.evaluate:
+    #     torch.cuda.empty_cache()
+    #     evaluate(model_without_ddp, vae, ema_params, args, 0, batch_size=args.eval_bsz, log_writer=log_writer,
+    #              cfg=args.cfg, use_ema=True)
+    #     return
 
     # training
     print(f"Start training for {args.epochs} epochs")
