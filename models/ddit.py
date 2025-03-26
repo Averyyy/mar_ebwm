@@ -76,6 +76,8 @@ class DDiT(nn.Module):
         self.patch_size = patch_size
         self.seq_h = self.seq_w = img_size // vae_stride // patch_size
         self.seq_len = self.seq_h * self.seq_w
+        self.full_seq_len = (self.seq_len + 1) * 2
+        
         self.token_embed_dim = 16 * patch_size**2  # VAE latent dimension * patch size^2
         self.embed_dim = embed_dim
         self.out_channels = 16 * 2 if learn_sigma else 16
@@ -86,8 +88,10 @@ class DDiT(nn.Module):
         self.y_embedder = nn.Embedding(class_num, embed_dim)
         
         # pos embed learnable
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.seq_len, embed_dim))
-        self.pos_embed_pred = nn.Parameter(torch.zeros(1, self.seq_len, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.seq_len + 2, embed_dim))
+        
+        self.start_embed = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.end_embed = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
         self.input_proj = nn.Linear(self.token_embed_dim, embed_dim, bias=True)
         self.output_proj = nn.Linear(embed_dim, self.out_channels * patch_size**2, bias=True)
@@ -101,7 +105,7 @@ class DDiT(nn.Module):
             n_heads=num_heads,
             ffn_dim_multiplier=mlp_ratio,
             adaln_zero_init=False,
-            max_seq_len=self.seq_len*2,
+            max_seq_len=self.full_seq_len,
             final_output_dim=embed_dim,
         )
 
@@ -127,7 +131,9 @@ class DDiT(nn.Module):
 
         # Initialize positional embeddings
         nn.init.normal_(self.pos_embed, std=0.02)
-        nn.init.normal_(self.pos_embed_pred, std=0.02)
+        
+        nn.init.normal_(self.start_embed, std=0.02)
+        nn.init.normal_(self.end_embed, std=0.02)
 
         # Initialize projections
         nn.init.xavier_uniform_(self.input_proj.weight)
@@ -192,30 +198,37 @@ class DDiT(nn.Module):
         x_start_embed = self.input_proj(x_start_patches)
         x_t_embed = self.input_proj(x_t_patches)
         
-        x_start_embed = x_start_embed + self.pos_embed
-        x_t_embed = x_t_embed + self.pos_embed_pred
+        real_tokens = torch.cat([
+            self.start_embed.expand(x_start_embed.shape[0], -1, -1),
+            x_start_embed
+        ], dim=1)  # [B, S+1, D]
+        
+        pred_tokens = torch.cat([
+            x_t_embed,
+            self.end_embed.expand(x_t_embed.shape[0], -1, -1)
+        ], dim=1)  # [B, S+1, D]
+        
+        real_tokens = real_tokens + self.pos_embed[:, :self.seq_len + 1, :]  # Positions 0 to seq_len
+        pred_tokens = pred_tokens + self.pos_embed[:, 1:self.seq_len + 2, :] # Positions 1 to seq_len+1
+        
+        combined = torch.cat([real_tokens, pred_tokens], dim=1)
 
         # Get timestep and class embeddings - [B, embed_dim]
         t_emb = self.t_embedder(t)
 
-        
         if self.training and self.dropout_prob > 0:
             drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
             labels = torch.where(drop_ids, torch.ones_like(labels) * self.y_embedder.num_embeddings - 1, labels)
         
         y_emb = self.y_embedder(labels)
         c = t_emb + y_emb  # [B, embed_dim]
-        # Create input with real tokens followed by predicted tokens
-        real_tokens = x_start_embed.clone()
-        pred_tokens = x_t_embed.clone()
-        combined = torch.cat([real_tokens, pred_tokens], dim=1)
+
         
         # Forward pass through ebt
         transformer_output = self.transformer(combined, start_pos=0, mcmc_step=None, c=c)
 
         # Project back to token space [B, S, C*P*P]
-        token_preds = self.output_proj(transformer_output)
-
+        token_preds = self.output_proj(transformer_output[:, :self.seq_len, :])  # [B, seq_len, out_channels * patch_size^2]
         # Reshape and unpatchify to get the final output [B, C, H, W]
         final_output = self.unpatchify(token_preds)
 
