@@ -35,6 +35,26 @@ torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --m
 --output_dir ./output/ddit/ddit_2xs-eval  --data_path ./data/tiny-imagenet-200 \
 --use_cached --cached_path ./data/cached-tiny-imagenet \
 --seed 42 \
+--resume ./output/ddit/ddit_2xs-eval \
+--online_eval \
+--eval_freq 5
+
+# eval
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4740 main_mar.py --model_type ddit \
+--img_size 256 \
+--vae_path pretrained_models/vae/kl16.ckpt \
+--output_dir ./output/ddit/ddit_2xs-eval \
+--vae_embed_dim 16 --vae_stride 16 --patch_size 1 \
+--embed_dim 384 --depth 6 --num_heads 6 --diffusion_batch_mul 4 \
+--resume ./output/ddit/ddit_2xs-eval \
+--use_cached --cached_path ./data/cached-tiny-imagenet \
+--seed 42 \
 --evaluate \
---eval_freq 15
+--num_iter 150 \
+--num_sampling_steps 200 \
+
+
+
+
+
 
