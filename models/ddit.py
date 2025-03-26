@@ -73,6 +73,7 @@ class DDiT(nn.Module):
         # Image and patch dimensions
         self.img_size = img_size
         self.vae_stride = vae_stride
+        self.vae_embed_dim = 16
         self.patch_size = patch_size
         self.seq_h = self.seq_w = img_size // vae_stride // patch_size
         self.seq_len = self.seq_h * self.seq_w
@@ -85,7 +86,7 @@ class DDiT(nn.Module):
 
         # Timestep and class embedders
         self.t_embedder = TimestepEmbedder(embed_dim)
-        self.y_embedder = nn.Embedding(class_num, embed_dim)
+        self.y_embedder = nn.Embedding(class_num + 1, embed_dim)
         
         # pos embed learnable
         self.pos_embed = nn.Parameter(torch.zeros(1, self.seq_len + 2, embed_dim))
@@ -233,61 +234,48 @@ class DDiT(nn.Module):
         final_output = self.unpatchify(token_preds)
 
         return final_output
-
     def forward_with_cfg(self, x, t, labels, cfg_scale):
-        """
-        Forward pass with classifier-free guidance.
-        """
-        half = x[: len(x) // 2]
+        half = x[:len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        t_combined = torch.cat([t[:len(t)//2], t[:len(t)//2]], dim=0)
+        t_combined = torch.cat([t[:len(t) // 2], t[:len(t) // 2]], dim=0)
 
         # Conditional and unconditional labels
-        labels_cond = labels[:len(labels)//2]
-        # Create unconditional labels (set to class num which is reserved for null class)
-        labels_uncond = torch.full_like(labels_cond, self.y_embedder.num_classes)
+        labels_cond = labels[:len(labels) // 2]
+        labels_uncond = torch.full_like(labels_cond, self.y_embedder.num_embeddings - 1)  # 无条件标签
         labels_combined = torch.cat([labels_cond, labels_uncond], dim=0)
 
-        # Forward pass
-        model_output = self.forward(combined, t_combined, labels_combined)
+        # Forward pass with current noise as x_start
+        model_output = self._forward_impl(combined, t_combined, x_start=combined, labels=labels_combined)
 
         # Split conditional and unconditional outputs
         model_output_cond, model_output_uncond = torch.split(model_output, len(model_output) // 2, dim=0)
 
-        # Apply classifier-free guidance formula
+        # Apply CFG formula
         guided_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
 
         return guided_output
 
-
-    def sample(self, shape, labels, cfg_scale=1.0, device=None):
-        """
-        Sample from the model using diffusion sampling.
-        """
-        if device is None:
-            device = next(self.parameters()).device
-
-        # Start with random noise
+    def sample_tokens(self, bsz, num_iter=64, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=False):
+        device = next(self.parameters()).device
+        shape = (bsz, self.vae_embed_dim, self.img_size // self.vae_stride, self.img_size // self.vae_stride)
+        
         img = torch.randn(*shape, device=device)
 
-        # Define model function
-        def model_fn(x, ts, **kwargs):
-            if cfg_scale > 1.0:
-                half_shape = list(x.shape)
-                half_shape[0] = half_shape[0] // 2
-                x_in = torch.cat([x[:half_shape[0]], x[:half_shape[0]]], dim=0)
-                t_in = torch.cat([ts[:half_shape[0]], ts[:half_shape[0]]], dim=0)
-                return self.forward_with_cfg(x_in, t_in, labels, cfg_scale)
-            else:
-                return self.forward(x, ts, labels)
+        if labels is None:
+            labels = torch.randint(0, self.y_embedder.num_embeddings - 1, (bsz,), device=device)
 
-        # Sample using diffusion
+        def model_fn(x, ts):
+            if cfg > 1.0:
+                return self.forward_with_cfg(x, ts, labels, cfg_scale=cfg)
+            else:
+                return self._forward_impl(x, ts, x_start=x, labels=labels)
+
         samples = self.diffusion.p_sample_loop(
             model_fn,
             shape,
             noise=img,
             device=device,
-            progress=True
+            progress=progress
         )
 
         return samples
