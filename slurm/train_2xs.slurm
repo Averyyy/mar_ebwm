@@ -24,7 +24,7 @@ cd /work/hdd/bdta/aqian1/mar_ebwm
 # torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4738 main_ddit.py --epochs 20 --warmup_epochs 1 --img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 --vae_stride 16 --patch_size 1 --embed_dim 1024 --depth 16 --num_heads 16 --diffusion_batch_mul 4 --output_dir ./output/ddit --resume ./output/ddit  --data_path ./data/tiny-imagenet-200 --use_cached --cached_path ./data/cached-tiny-imagenet
 
 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4739 main_mar.py --model_type ddit \
---run_name ddit-2xs-eval \
+--run_name ddit-2xs-fix-leakage \
 --epochs 50 --warmup_epochs 5 \
 --batch_size 96 \
 --blr 5e-5 \
@@ -32,12 +32,12 @@ torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --m
 --vae_path pretrained_models/vae/kl16.ckpt \
 --vae_embed_dim 16 --vae_stride 16 --patch_size 1 \
 --embed_dim 384 --depth 6 --num_heads 6 --diffusion_batch_mul 4 \
---output_dir ./output/ddit/ddit_2xs-eval  --data_path ./data/tiny-imagenet-200 \
+--output_dir ./output/ddit/ddit-2xs-fix-leakage  --data_path ./data/tiny-imagenet-200 \
 --use_cached --cached_path ./data/cached-tiny-imagenet \
 --seed 42 \
---resume ./output/ddit/ddit_2xs-eval \
+--resume ./output/ddit/ddit-2xs-fix-leakage \
 --online_eval \
---eval_freq 5
+--eval_freq 10
 
 # eval
 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4740 main_mar.py --model_type ddit \

@@ -131,8 +131,8 @@ def get_args_parser():
     parser.add_argument('--cached_path', default='', help='path to cached latents')
     
     # ddit selection
-    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit'],
-                        help="Type of model to run ('mar' for MAR or 'ddit' for DDiT)")
+    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt'],
+                        help="Type of model to run ('mar' for MAR or 'ddit' for DDiT or debt)")
 
     # DDiT-specific parameters (only used if --model_type ddit is specified)
     parser.add_argument('--run_name', default='ddit', help='name of the run for logging')
@@ -146,6 +146,14 @@ def get_args_parser():
                         help='[DDiT] MLP hidden dim expansion ratio')
     parser.add_argument('--learn_sigma', action='store_true',
                         help='[DDiT] Whether to learn the noise prediction sigma')
+    
+    # DEBT-specific parameters
+    parser.add_argument('--mcmc_num_steps', default=10, type=int, help='[DEBT] Number of MCMC steps')
+    parser.add_argument('--mcmc_step_size', default=0.1, type=float, help='[DEBT] MCMC step size')
+    parser.add_argument('--langevin_dynamics_noise', default=0.01, type=float, help='[DEBT] Langevin dynamics noise std')
+    parser.add_argument('--denoising_initial_condition', default='random_noise', type=str, 
+                        choices=['random_noise', 'most_recent_embedding', 'zeros'], 
+                        help='[DEBT] Initial condition for denoising')
 
     return parser
 
@@ -223,6 +231,26 @@ def main(args):
             num_sampling_steps=args.num_sampling_steps,
             diffusion_batch_mul=args.diffusion_batch_mul,
         )
+    elif args.model_type == "debt":
+        from models.debt import DEBT
+        model = DEBT(
+            img_size=args.img_size,
+            vae_stride=args.vae_stride,
+            patch_size=args.patch_size,
+            embed_dim=args.embed_dim,
+            depth=args.depth,
+            num_heads=args.num_heads,
+            mlp_ratio=args.mlp_ratio,
+            class_num=args.class_num,
+            dropout_prob=args.attn_dropout,
+            learn_sigma=args.learn_sigma,
+            num_sampling_steps=args.num_sampling_steps,
+            diffusion_batch_mul=args.diffusion_batch_mul,
+            mcmc_num_steps=args.mcmc_num_steps,
+            mcmc_step_size=args.mcmc_step_size,
+            langevin_dynamics_noise=args.langevin_dynamics_noise,
+            denoising_initial_condition=args.denoising_initial_condition,
+        )
     else:
         from models import mar
         model = mar.__dict__[args.model](
@@ -261,7 +289,7 @@ def main(args):
     print("effective batch size: %d" % eff_batch_size)
 
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
     # no weight decay on bias, norm layers, and diffloss MLP
