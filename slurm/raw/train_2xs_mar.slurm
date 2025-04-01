@@ -31,7 +31,7 @@ torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --m
 --img_size 256 \
 --vae_path pretrained_models/vae/kl16.ckpt \
 --vae_embed_dim 16 --vae_stride 16 --patch_size 1 \
---output_dir ./output/mar-2xs-cached --resume ./output/mar-2xs-cached \
+--output_dir ./output/mar-2xs-1k --resume ./output/mar-2xs-1k \
 --use_cached --cached_path ./data/cached-tiny-imagenet \
 --seed 42 \
 --diffloss_w 1024 --diffloss_d 3 \

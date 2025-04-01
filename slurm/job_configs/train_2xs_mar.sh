@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --gpus-per-node=1
-#SBATCH --job-name=ddit-2xs-latest
+#SBATCH --job-name=mar-2xs-1k
+#SBATCH --time=06:00:00
 #SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm_outputs/mar-2xs-%j.out
 
 source activate mar
