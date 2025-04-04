@@ -8,7 +8,9 @@ from diffusion import create_diffusion
 
 class DiffLoss(nn.Module):
     """Diffusion Loss"""
-    def __init__(self, target_channels, z_channels, depth, width, num_sampling_steps, grad_checkpointing=False):
+    def __init__(self, target_channels, z_channels, depth, width, num_sampling_steps, grad_checkpointing=False, 
+                 energy_mode=True, mcmc_num_steps=10, mcmc_step_size=0.1):
+        
         super(DiffLoss, self).__init__()
         self.in_channels = target_channels
         self.net = SimpleMLPAdaLN(
@@ -17,7 +19,10 @@ class DiffLoss(nn.Module):
             out_channels=target_channels * 2,  # for vlb loss
             z_channels=z_channels,
             num_res_blocks=depth,
-            grad_checkpointing=grad_checkpointing
+            grad_checkpointing=grad_checkpointing,
+            energy_mode=energy_mode,
+            mcmc_num_steps=mcmc_num_steps,
+            mcmc_step_size=mcmc_step_size
         )
 
         self.train_diffusion = create_diffusion(timestep_respacing="", noise_schedule="cosine")
@@ -165,7 +170,10 @@ class SimpleMLPAdaLN(nn.Module):
         out_channels,
         z_channels,
         num_res_blocks,
-        grad_checkpointing=False
+        grad_checkpointing=False,
+        energy_mode=True,
+        mcmc_num_steps=10,
+        mcmc_step_size=0.1
     ):
         super().__init__()
 
@@ -174,11 +182,18 @@ class SimpleMLPAdaLN(nn.Module):
         self.out_channels = out_channels
         self.num_res_blocks = num_res_blocks
         self.grad_checkpointing = grad_checkpointing
+        
+        # energy configs
+        self.energy_mode = energy_mode
+        self.mcmc_num_steps = mcmc_num_steps
+        self.mcmc_step_size = mcmc_step_size
 
         self.time_embed = TimestepEmbedder(model_channels)
         self.cond_embed = nn.Linear(z_channels, model_channels)
 
         self.input_proj = nn.Linear(in_channels, model_channels)
+        
+        self.pred_proj = nn.Linear(2 * in_channels, model_channels)
 
         res_blocks = []
         for i in range(num_res_blocks):
@@ -187,6 +202,8 @@ class SimpleMLPAdaLN(nn.Module):
             ))
 
         self.res_blocks = nn.ModuleList(res_blocks)
+        
+        out_channels = 1 if energy_mode else out_channels
         self.final_layer = FinalLayer(model_channels, out_channels)
 
         self.initialize_weights()
@@ -222,7 +239,11 @@ class SimpleMLPAdaLN(nn.Module):
         :param c: conditioning from AR transformer.
         :return: an [N x C] Tensor of outputs.
         """
-        x = self.input_proj(x)
+        print("x.shape", x.shape)
+        print("t.shape", t.shape)
+        print("c.shape", c.shape)
+        B, C = x.shape
+        x_proj = self.input_proj(x)
         t = self.time_embed(t)
         c = self.cond_embed(c)
 
@@ -230,12 +251,33 @@ class SimpleMLPAdaLN(nn.Module):
 
         if self.grad_checkpointing and not torch.jit.is_scripting():
             for block in self.res_blocks:
-                x = checkpoint(block, x, y)
+                x_proj = checkpoint(block, x_proj, y)
         else:
             for block in self.res_blocks:
-                x = block(x, y)
+                x_proj = block(x_proj, y)
 
-        return self.final_layer(x, y)
+        if not self.energy_mode:
+            return self.final_layer(x_proj, y)
+        else:
+            with torch.cuda.amp.autocast(enabled=False):
+                with torch.set_grad_enabled(True):   
+                    predicted_embeddings = torch.randn(B, 2 * C).to(x.device)      # for learn_sigma=True mode   
+                    for _ in range(self.mcmc_num_steps):
+                        predicted_embeddings = predicted_embeddings.detach().requires_grad_()
+
+                        h_energy = x_proj + self.pred_proj(predicted_embeddings)
+                        for block in self.res_blocks:
+                            h_energy = block(h_energy, y)
+                        energy_preds = self.final_layer(h_energy, y)  # Outputs scalar energy
+
+                        # Compute gradient w.r.t. predicted_embeddings
+                        predicted_embeds_grad = torch.autograd.grad(energy_preds.sum(), predicted_embeddings, 
+                                            create_graph=True, retain_graph=True)[0]
+
+                        # Update predicted_embeddings
+                        predicted_embeddings = predicted_embeddings - self.mcmc_step_size * predicted_embeds_grad
+
+            return predicted_embeddings
 
     def forward_with_cfg(self, x, t, c, cfg_scale):
         half = x[: len(x) // 2]

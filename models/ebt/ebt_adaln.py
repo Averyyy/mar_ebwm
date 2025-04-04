@@ -582,7 +582,7 @@ class EBTAdaLN(nn.Module):
         else:
             init_whole_model_weights(self.final_layer.linear, self.params.weight_initialization)
 
-    def forward(self, embeddings: torch.Tensor, start_pos: int, mcmc_step=None, c=None):
+    def forward(self, embeddings: torch.Tensor, start_pos: int, mcmc_step=None, c=None, mask=None):
         """
         Perform a forward pass through the Transformer model.
 

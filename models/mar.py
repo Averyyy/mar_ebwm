@@ -10,8 +10,38 @@ from torch.utils.checkpoint import checkpoint
 
 from timm.models.vision_transformer import Block
 
-from models.diffloss import DiffLoss
+# from models.diffloss import DiffLoss
+from models.ebt.ebt_adaln import EBTAdaLN
+from models.ebt.model_utils import EBTModelArgs
+from diffusion import create_diffusion
 
+
+class TimestepEmbedder(nn.Module):
+    def __init__(self, hidden_size, frequency_embedding_size=256):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True),
+        )
+        self.frequency_embedding_size = frequency_embedding_size
+
+    @staticmethod
+    def timestep_embedding(t, dim, max_period=10000):
+        half = dim // 2
+        freqs = torch.exp(
+            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
+        ).to(device=t.device)
+        args = t[:, None].float() * freqs[None]
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        if dim % 2:
+            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+        return embedding
+
+    def forward(self, t):
+        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        t_emb = self.mlp(t_freq)
+        return t_emb
 
 def mask_by_order(mask_len, order, bsz, seq_len):
     masking = torch.zeros(bsz, seq_len).cuda()
@@ -25,6 +55,9 @@ class MAR(nn.Module):
     def __init__(self, img_size=256, vae_stride=16, patch_size=1,
                  encoder_embed_dim=1024, encoder_depth=16, encoder_num_heads=16,
                  decoder_embed_dim=1024, decoder_depth=16, decoder_num_heads=16,
+                 ebt_depth=16, ebt_num_heads=16,
+                 mcmc_num_steps=10, mcmc_step_size=0.01,
+                 learn_sigma=False,
                  mlp_ratio=4., norm_layer=nn.LayerNorm,
                  vae_embed_dim=16,
                  mask_ratio_min=0.7,
@@ -89,20 +122,34 @@ class MAR(nn.Module):
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
-
-        self.initialize_weights()
-
-        # --------------------------------------------------------------------------
-        # Diffusion Loss
-        self.diffloss = DiffLoss(
-            target_channels=self.token_embed_dim,
-            z_channels=decoder_embed_dim,
-            width=diffloss_w,
-            depth=diffloss_d,
-            num_sampling_steps=num_sampling_steps,
-            grad_checkpointing=grad_checkpointing
+        
+        transformer_args = EBTModelArgs(
+            dim=decoder_embed_dim,
+            n_layers=ebt_depth,
+            n_heads=ebt_num_heads,
+            ffn_dim_multiplier=mlp_ratio,
+            adaln_zero_init=False,
+            max_seq_len=2 * self.seq_len,  # gt + predicted embeddings
+            final_output_dim=1,  # Energy prediction
         )
-        self.diffusion_batch_mul = diffusion_batch_mul
+        # ebt related
+        self.transformer = EBTAdaLN(
+            params=transformer_args,
+            max_mcmc_steps=mcmc_num_steps
+        )
+        
+        self.diffusion = create_diffusion(
+            timestep_respacing=num_sampling_steps,
+            noise_schedule="cosine",
+            learn_sigma=learn_sigma,
+        )
+        self.mcmc_num_steps = mcmc_num_steps
+        self.mcmc_step_size = mcmc_step_size
+
+        self.t_embedder = TimestepEmbedder(encoder_embed_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, 2 * self.seq_len, encoder_embed_dim))
+        self.output_proj = nn.Linear(decoder_embed_dim, self.token_embed_dim, bias=True)
+        self.initialize_weights()
 
     def initialize_weights(self):
         # parameters
@@ -229,16 +276,62 @@ class MAR(nn.Module):
         x = x + self.diffusion_pos_embed_learned
         return x
 
-    def forward_loss(self, z, target, mask):
-        bsz, seq_len, _ = target.shape
-        target = target.reshape(bsz * seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-        z = z.reshape(bsz*seq_len, -1).repeat(self.diffusion_batch_mul, 1)
-        mask = mask.reshape(bsz*seq_len).repeat(self.diffusion_batch_mul)
-        loss = self.diffloss(z=z, target=target, mask=mask)
-        return loss
+
+    
+    def corrupt_embeddings(self, embeddings):
+        """Corrupt embeddings to initialize predicted_embeddings."""
+        predicted_embeddings = torch.randn_like(embeddings)
+        return predicted_embeddings
+    
+    def refine_embeddings(self, real_embeddings, initial_predicted_embeddings, t):
+        """Refine predicted embeddings using MCMC to minimize energy."""
+        predicted_embeddings = initial_predicted_embeddings
+        alpha = max(self.mcmc_step_size, 0.0001)
+        for mcmc_step in range(self.mcmc_num_steps):
+            with torch.set_grad_enabled(True):
+                predicted_embeddings = predicted_embeddings.detach().requires_grad_()
+                all_embeddings = torch.cat([real_embeddings, predicted_embeddings], dim=1)
+                all_embeddings = all_embeddings + self.pos_embed
+                energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=t)
+                energy_sum = energy_preds[:, self.seq_len:].sum()
+                predicted_embeds_grad = torch.autograd.grad(
+                    energy_sum, predicted_embeddings, create_graph=True, retain_graph=True
+                )[0]
+                predicted_embeddings = predicted_embeddings - alpha * predicted_embeds_grad
+
+        return predicted_embeddings
+
+    def forward_ebt(self, x_t, t, z):
+        
+        real_embeddings = z
+        t_emb = self.t_embedder(t)
+        
+        initial_predicted_embeddings = self.corrupt_embeddings(real_embeddings)
+        predicted_embeddings = self.refine_embeddings(real_embeddings, initial_predicted_embeddings, t_emb)
+        predicted_embeddings = self.output_proj(predicted_embeddings)
+        
+        return self.unpatchify(predicted_embeddings)
+        
+    def forward_loss(self, imgs, z, x_t, t):
+        loss_dict = self.diffusion.training_losses(
+            model=self.forward_ebt,
+            x_start=imgs,
+            model_kwargs={"z": z},
+            t=t,
+        )
+        
+        return loss_dict["loss"].mean()
+  
 
     def forward(self, imgs, labels):
+        bsz = imgs.shape[0]
+        device = imgs.device
+        t = torch.randint(0, self.diffusion.num_timesteps, (bsz,), device=device)
 
+        # Compute noisy image x_t
+        noise = torch.randn_like(imgs)
+        x_t = self.diffusion.q_sample(imgs, t, noise=noise)
+        
         # class embed
         class_embedding = self.class_emb(labels)
 
@@ -253,11 +346,13 @@ class MAR(nn.Module):
 
         # mae decoder
         z = self.forward_mae_decoder(x, mask)
-
-        # diffloss
-        loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
+        
+        loss = self.forward_loss(imgs, z, x_t, t)
 
         return loss
+                            
+        
+
 
     def sample_tokens(self, bsz, num_iter=64, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=False):
 
