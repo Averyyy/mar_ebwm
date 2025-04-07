@@ -156,7 +156,7 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
-            if "loss" in self.meters:
+            if is_main_process() and "loss" in self.meters:
                 wandb.log({
                     "eta": float(eta_seconds),                    
                     "loss": float(self.meters["loss"].value),   
