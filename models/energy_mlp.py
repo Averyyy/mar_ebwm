@@ -37,7 +37,7 @@ class EnergyMLP(nn.Module):
         self.hidden_dim = hidden_dim
         self.depth = depth
         self.mcmc_num_steps = mcmc_num_steps
-        self.alpha = nn.Parameter(torch.tensor(alpha))  # Step size for updates
+        self.alpha = nn.Parameter(torch.tensor(alpha), requires_grad=True)  # Step size for updates
         self.langevin_noise_std = nn.Parameter(torch.tensor(langevin_noise_std))  # Noise scale
         self.reconstruction_coeff = reconstruction_coeff
         self.grad_checkpointing = grad_checkpointing
