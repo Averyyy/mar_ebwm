@@ -11,6 +11,7 @@ from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Block
 
 from models.diffloss import DiffLoss
+from models.energy_mlp import EnergyMLP
 
 
 def mask_by_order(mask_len, order, bsz, seq_len):
@@ -94,15 +95,20 @@ class MAR(nn.Module):
 
         # --------------------------------------------------------------------------
         # Diffusion Loss
-        self.diffloss = DiffLoss(
-            target_channels=self.token_embed_dim,
-            z_channels=decoder_embed_dim,
-            width=diffloss_w,
-            depth=diffloss_d,
-            num_sampling_steps=num_sampling_steps,
-            grad_checkpointing=grad_checkpointing
+        # self.diffloss = DiffLoss(
+        #     target_channels=self.token_embed_dim,
+        #     z_channels=decoder_embed_dim,
+        #     width=diffloss_w,
+        #     depth=diffloss_d,
+        #     num_sampling_steps=num_sampling_steps,
+        #     grad_checkpointing=grad_checkpointing
+        # )
+        # self.diffusion_batch_mul = diffusion_batch_mul
+        
+        self.energy_mlp = EnergyMLP(
+            token_embed_dim=vae_embed_dim,
+            z_dim=decoder_embed_dim,
         )
-        self.diffusion_batch_mul = diffusion_batch_mul
 
     def initialize_weights(self):
         # parameters
@@ -255,8 +261,10 @@ class MAR(nn.Module):
         z = self.forward_mae_decoder(x, mask)
 
         # diffloss
-        loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
+        # loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
 
+        predicted_embeddings_list, _ = self.energy_mlp(z, gt_latents)
+        loss = self.energy_mlp.compute_loss(predicted_embeddings_list, gt_latents)
         return loss
 
     def sample_tokens(self, bsz, num_iter=64, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=False):
