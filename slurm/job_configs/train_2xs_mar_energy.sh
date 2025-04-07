@@ -7,7 +7,7 @@
 source activate mar
 cd /work/hdd/bdta/aqian1/mar_ebwm
 
-torchrun --nproc_per_node=2 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4738 main_mar.py \
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4738 main_mar.py \
 --run_name mar-2xs-energy-tiny \
 --img_size 256 \
 --vae_path pretrained_models/vae/kl16.ckpt \

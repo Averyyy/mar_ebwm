@@ -292,8 +292,15 @@ def main(args):
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
-    # no weight decay on bias, norm layers, and diffloss MLP
-    param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay)
+    # no weight decay on bias, norm layers, and diffloss MLP    (legacy for mar)
+    # param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay)
+    mcmc_step_size_lr_multiplier = 1
+    alpha_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' in name]
+    other_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' not in name]
+    param_groups = [
+        {'params': alpha_params, 'weight_decay': 0.0, 'lr': mcmc_step_size_lr_multiplier * args.lr},
+        {'params': other_params, 'weight_decay': args.weight_decay, 'lr': args.lr}
+    ]
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
     print(optimizer)
     loss_scaler = NativeScaler()

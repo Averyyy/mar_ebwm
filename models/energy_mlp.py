@@ -30,15 +30,15 @@ class AdaLNResBlock(nn.Module):
 class EnergyMLP(nn.Module):
     """Energy-based MLP with AdaLN, conditioned on z"""
     def __init__(self, token_embed_dim, z_dim, hidden_dim=1024, depth=3, mcmc_num_steps=2, 
-                 alpha=0.1, langevin_noise_std=0.01, reconstruction_coeff=1.0, grad_checkpointing=False):
+                 alpha=0.01, langevin_noise_std=0.01, reconstruction_coeff=1.0, grad_checkpointing=False):
         super().__init__()
         self.token_embed_dim = token_embed_dim
         self.z_dim = z_dim
         self.hidden_dim = hidden_dim
         self.depth = depth
         self.mcmc_num_steps = mcmc_num_steps
-        self.alpha = nn.Parameter(torch.tensor(alpha), requires_grad=True)  # Step size for updates
-        self.langevin_noise_std = nn.Parameter(torch.tensor(langevin_noise_std))  # Noise scale
+        self.alpha = nn.Parameter(torch.tensor(float(alpha)), requires_grad=True)  # Step size for updates, set to learnable
+        self.langevin_noise_std = nn.Parameter(torch.tensor(float(langevin_noise_std)), requires_grad=False)  # Noise scale
         self.reconstruction_coeff = reconstruction_coeff
         self.grad_checkpointing = grad_checkpointing
 
@@ -71,6 +71,9 @@ class EnergyMLP(nn.Module):
         B, S, D = real_embeddings_input.shape
         predicted_embeddings_list = []
         predicted_energies_list = []
+        
+        alpha = torch.clamp(self.alpha, min=0.0001)
+        langevin_noise_std = torch.clamp(self.langevin_noise_std, min=0.000001)
 
         # Initialize predicted embeddings as pure noise
         predicted_embeddings = torch.randn(B, S, self.token_embed_dim, device=z.device)
@@ -79,7 +82,7 @@ class EnergyMLP(nn.Module):
             for _ in range(self.mcmc_num_steps):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
                 # Add Langevin dynamics noise
-                noise = torch.randn_like(predicted_embeddings) * self.langevin_noise_std
+                noise = torch.randn_like(predicted_embeddings.detach()) * langevin_noise_std
                 predicted_embeddings = predicted_embeddings + noise
                 # Compute energy
                 energy = self.compute_energy(predicted_embeddings, z)
@@ -87,7 +90,7 @@ class EnergyMLP(nn.Module):
                 # Compute gradient of energy
                 grad = torch.autograd.grad(energy.sum(), predicted_embeddings, create_graph=True)[0]
                 # Update predicted embeddings
-                predicted_embeddings = predicted_embeddings - self.alpha * grad
+                predicted_embeddings = predicted_embeddings - alpha * grad
                 predicted_embeddings_list.append(predicted_embeddings)
 
         return predicted_embeddings_list, predicted_energies_list
