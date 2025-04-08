@@ -82,7 +82,7 @@ class EnergyMLP(nn.Module):
             for _ in range(self.mcmc_num_steps):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
                 # Add Langevin dynamics noise
-                noise = torch.randn_like(predicted_embeddings.detach()) * langevin_noise_std
+                noise = torch.randn_like(predicted_embeddings.detach()) * langevin_noise_std #TODO add this conditionally if its not 0 and set langevin_noise_std to 0 for now
                 predicted_embeddings = predicted_embeddings + noise
                 # Compute energy
                 energy = self.compute_energy(predicted_embeddings, z)
@@ -104,7 +104,7 @@ class EnergyMLP(nn.Module):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
                 energy = self.compute_energy(predicted_embeddings, z)
                 grad = torch.autograd.grad(energy.sum(), predicted_embeddings)[0]
-                noise = torch.randn_like(predicted_embeddings) * self.langevin_noise_std * temperature
+                noise = torch.randn_like(predicted_embeddings) * self.langevin_noise_std * temperature #TODO add this before calculating energy and only if self.langevin_noise_std, also default that to 0 for all exps for now
                 predicted_embeddings = predicted_embeddings - self.alpha * grad + noise
         return predicted_embeddings.detach()
 
