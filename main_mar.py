@@ -154,6 +154,9 @@ def get_args_parser():
     parser.add_argument('--denoising_initial_condition', default='random_noise', type=str, 
                         choices=['random_noise', 'most_recent_embedding', 'zeros'], 
                         help='[DEBT] Initial condition for denoising')
+    
+    parser.add_argument('--grad_accu', default=1, type=int,
+                    help='Number of gradient accumulation steps')
 
     return parser
 
@@ -279,7 +282,7 @@ def main(args):
     model.to(device)
     model_without_ddp = model
 
-    eff_batch_size = args.batch_size * misc.get_world_size()
+    eff_batch_size = args.batch_size * misc.get_world_size() * args.grad_accu
     
     if args.lr is None:  # only base_lr is specified
         args.lr = args.blr * eff_batch_size / 256

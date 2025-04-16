@@ -45,7 +45,11 @@ def train_one_epoch(model, vae,
 
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
-
+        
+    accum_steps = args.grad_accu 
+    loss_sum = 0.0
+    batch_count = 0
+    
     for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
         # we use a per iteration (instead of per epoch) lr scheduler
@@ -67,26 +71,36 @@ def train_one_epoch(model, vae,
         # forward
         with torch.cuda.amp.autocast():
             loss = model(x, labels)
+            loss = loss / accum_steps
 
         loss_value = loss.item()
+        loss_sum += loss_value * accum_steps #for logging
+        batch_count += 1
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
 
-        loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True)
-        optimizer.zero_grad()
+        loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=False, do_backward=True)
+        if (data_iter_step + 1) % accum_steps == 0 or (data_iter_step + 1) == len(data_loader):
+            loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True, do_backward=False)
+            optimizer.zero_grad()
+
+            avg_loss = loss_sum / batch_count
+            metric_logger.update(loss=avg_loss)
+            loss_sum = 0.0
+            batch_count = 0
 
         torch.cuda.synchronize()
 
         update_ema(ema_params, model_params, rate=args.ema_rate)
 
-        metric_logger.update(loss=loss_value)
+        metric_logger.update(loss=loss_value * accum_steps)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
-        loss_value_reduce = misc.all_reduce_mean(loss_value)
+        loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
         if log_writer is not None:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
