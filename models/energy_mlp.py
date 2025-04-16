@@ -29,8 +29,8 @@ class AdaLNResBlock(nn.Module):
 
 class EnergyMLP(nn.Module):
     """Energy-based MLP with AdaLN, conditioned on z"""
-    def __init__(self, token_embed_dim, z_dim, hidden_dim=1024, depth=3, mcmc_num_steps=2, 
-                 alpha=0.01, langevin_noise_std=0.01, reconstruction_coeff=1.0, grad_checkpointing=False):
+    def __init__(self, token_embed_dim, z_dim, hidden_dim=1024, depth=6, mcmc_num_steps=2, 
+                 alpha=.1, langevin_noise_std=0, reconstruction_coeff=1.0, grad_checkpointing=False):
         super().__init__()
         self.token_embed_dim = token_embed_dim
         self.z_dim = z_dim
@@ -56,14 +56,14 @@ class EnergyMLP(nn.Module):
 
     def compute_energy(self, predicted_embeddings, z):
         """Compute energy conditioned on z"""
-        x = self.input_proj(predicted_embeddings)  # [B, S, hidden_dim]
-        c = self.cond_proj(z)  # [B, S, hidden_dim]
+        x = self.input_proj(predicted_embeddings)  # [B, S, hidden_dim]  |  [N, hidden_dim]
+        c = self.cond_proj(z)  # [B, S, hidden_dim]  |  [N, hidden_dim]
         for block in self.res_blocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 x = checkpoint(block, x, c)
             else:
                 x = block(x, c)
-        energy = self.final_layer(x)  # [B, S, 1]
+        energy = self.final_layer(x)  # [B, S, 1]  |  [N, 1]
         return energy
 
     def forward(self, z, real_embeddings_input):
@@ -82,31 +82,38 @@ class EnergyMLP(nn.Module):
             for _ in range(self.mcmc_num_steps):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
                 # Add Langevin dynamics noise
-                noise = torch.randn_like(predicted_embeddings.detach()) * langevin_noise_std #TODO add this conditionally if its not 0 and set langevin_noise_std to 0 for now
-                predicted_embeddings = predicted_embeddings + noise
+                # noise = torch.randn_like(predicted_embeddings.detach()) * langevin_noise_std #TODO add this conditionally if its not 0 and set langevin_noise_std to 0 for now
+                # predicted_embeddings = predicted_embeddings + noise
                 # Compute energy
                 energy = self.compute_energy(predicted_embeddings, z)
                 predicted_energies_list.append(energy)
                 # Compute gradient of energy
-                grad = torch.autograd.grad(energy.sum(), predicted_embeddings, create_graph=True)[0]
+                grad = torch.autograd.grad(energy.sum(), predicted_embeddings, create_graph=True, retain_graph=True)[0]
                 # Update predicted embeddings
                 predicted_embeddings = predicted_embeddings - alpha * grad
                 predicted_embeddings_list.append(predicted_embeddings)
 
         return predicted_embeddings_list, predicted_energies_list
 
-    def sample(self, z, temperature=1.0):
-        """Sample embeddings from noise"""
-        B, S, _ = z.shape
-        predicted_embeddings = torch.randn(B, S, self.token_embed_dim, device=z.device)
-        with torch.enable_grad():
-            for _ in range(self.mcmc_num_steps):
-                predicted_embeddings = predicted_embeddings.detach().requires_grad_()
-                energy = self.compute_energy(predicted_embeddings, z)
-                grad = torch.autograd.grad(energy.sum(), predicted_embeddings)[0]
-                noise = torch.randn_like(predicted_embeddings) * self.langevin_noise_std * temperature #TODO add this before calculating energy and only if self.langevin_noise_std, also default that to 0 for all exps for now
-                predicted_embeddings = predicted_embeddings - self.alpha * grad + noise
-        return predicted_embeddings.detach()
+    def sample(self, z_cond, z_uncond=None, cfg=1.0, temperature=1.0):
+            """Sample embeddings with optional CFG"""
+            N, _ = z_cond.shape  # z_cond is [N, z_dim]
+            predicted_embeddings = torch.randn(N, self.token_embed_dim, device=z_cond.device)
+            with torch.enable_grad():
+                for _ in range(self.mcmc_num_steps):
+                    predicted_embeddings = predicted_embeddings.detach().requires_grad_()
+                    energy_cond = self.compute_energy(predicted_embeddings, z_cond)
+                    grad_cond = torch.autograd.grad(energy_cond.sum(), predicted_embeddings)[0]
+                    if z_uncond is not None and cfg > 1.0:
+                        energy_uncond = self.compute_energy(predicted_embeddings, z_uncond)
+                        grad_uncond = torch.autograd.grad(energy_uncond.sum(), predicted_embeddings)[0]
+                        grad = (1 + cfg) * grad_cond - cfg * grad_uncond
+                    else:
+                        grad = grad_cond
+                    # noise = torch.randn_like(predicted_embeddings) * temperature
+                    # predicted_embeddings = predicted_embeddings - self.alpha * grad + noise
+                    predicted_embeddings = predicted_embeddings - self.alpha * grad
+            return predicted_embeddings.detach()
 
     def compute_loss(self, predicted_embeddings_list, real_embeddings_input):
         """Compute reconstruction loss"""

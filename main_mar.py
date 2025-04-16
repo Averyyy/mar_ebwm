@@ -154,6 +154,9 @@ def get_args_parser():
     parser.add_argument('--denoising_initial_condition', default='random_noise', type=str, 
                         choices=['random_noise', 'most_recent_embedding', 'zeros'], 
                         help='[DEBT] Initial condition for denoising')
+    
+    parser.add_argument('--grad_accu', default=1, type=int,
+                    help='Number of gradient accumulation steps')
 
     return parser
 
@@ -293,14 +296,14 @@ def main(args):
         model_without_ddp = model.module
 
     # no weight decay on bias, norm layers, and diffloss MLP    (legacy for mar)
-    # param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay)
-    mcmc_step_size_lr_multiplier = 1
-    alpha_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' in name]
-    other_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' not in name]
-    param_groups = [
-        {'params': alpha_params, 'weight_decay': 0.0, 'lr': mcmc_step_size_lr_multiplier * args.lr},
-        {'params': other_params, 'weight_decay': args.weight_decay, 'lr': args.lr}
-    ]
+    args.mcmc_step_size_lr_multiplier = 2
+    param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay, (), args)
+    # alpha_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' in name]
+    # other_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' not in name]
+    # param_groups = [
+    #     {'params': alpha_params, 'weight_decay': 0.0, 'lr': mcmc_step_size_lr_multiplier * args.lr},
+    #     {'params': other_params, 'weight_decay': args.weight_decay, 'lr': args.lr}
+    # ]
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
     print(optimizer)
     loss_scaler = NativeScaler()

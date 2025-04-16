@@ -307,19 +307,24 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     return total_norm
 
 
-def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
+def add_weight_decay(model, weight_decay=1e-5, skip_list=(), args=None):
     decay = []
     no_decay = []
+    mcmc_step_size = []
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue  # frozen weights
-        if len(param.shape) == 1 or name.endswith(".bias") or name in skip_list or 'diffloss' in name:
+        if 'alpha' in name:
+            mcmc_step_size.append(param)  # MCMC step size parameters (separate group)
+        elif len(param.shape) == 1 or name.endswith(".bias") or name in skip_list or 'diffloss' in name:
             no_decay.append(param)  # no weight decay on bias, norm and diffloss
         else:
             decay.append(param)
     return [
         {'params': no_decay, 'weight_decay': 0.},
-        {'params': decay, 'weight_decay': weight_decay}]
+        {'params': decay, 'weight_decay': weight_decay}, 
+        {'params': mcmc_step_size, 'weight_decay': 0., 'lr': args.mcmc_step_size_lr_multiplier * args.lr},]
+    
 
 
 def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, ema_params=None, epoch_name=None):

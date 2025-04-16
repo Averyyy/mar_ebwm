@@ -317,17 +317,30 @@ class MAR(nn.Module):
 
             # sample token latents for this step
             z = z[mask_to_pred.nonzero(as_tuple=True)]
-            # cfg schedule follow Muse
-            if cfg_schedule == "linear":
-                cfg_iter = 1 + (cfg - 1) * (self.seq_len - mask_len[0]) / self.seq_len
-            elif cfg_schedule == "constant":
-                cfg_iter = cfg
+            # # cfg schedule follow Muse
+            # if cfg_schedule == "linear":
+            #     cfg_iter = 1 + (cfg - 1) * (self.seq_len - mask_len[0]) / self.seq_len
+            # elif cfg_schedule == "constant":
+            #     cfg_iter = cfg
+            # else:
+            #     raise NotImplementedError
+            # sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+            # if not cfg == 1.0:
+            #     sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
+            #     mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)
+            if cfg != 1.0:
+                num_tokens = mask_to_pred.sum().item()
+                z_cond = z[:num_tokens]
+                z_uncond = z[num_tokens:]
+                if cfg_schedule == "linear":
+                    cfg_iter = 1 + (cfg - 1) * (self.seq_len - mask_len[0]) / self.seq_len
+                elif cfg_schedule == "constant":
+                    cfg_iter = cfg
+                else:
+                    raise NotImplementedError
+                sampled_token_latent = self.energy_mlp.sample(z_cond, z_uncond, cfg=cfg_iter, temperature=temperature)
             else:
-                raise NotImplementedError
-            sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
-            if not cfg == 1.0:
-                sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
-                mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)
+                sampled_token_latent = self.energy_mlp.sample(z, temperature=temperature)
 
             cur_tokens[mask_to_pred.nonzero(as_tuple=True)] = sampled_token_latent
             tokens = cur_tokens.clone()

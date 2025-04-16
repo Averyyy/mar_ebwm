@@ -6,8 +6,6 @@
 
 cd /work/hdd/bdta/aqian1/mar_ebwm
 
-source activate mar
-
 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4739 main_mar.py --model_type ddit \
 --run_name ddit-2xs-sp \
 --epochs 50 --warmup_epochs 5 \
