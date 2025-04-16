@@ -182,6 +182,14 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         torch.distributed.barrier()
         sampled_images = sampled_images.detach().cpu()
         sampled_images = (sampled_images + 1) / 2
+        
+        if misc.is_main_process() and i == 0:
+            images_to_log = []
+            for b_id in range(min(5, sampled_images.size(0))):
+                gen_img = np.round(np.clip(sampled_images[b_id].numpy().transpose([1, 2, 0]) * 255, 0, 255))
+                label = labels_gen[b_id].item()
+                images_to_log.append(wandb.Image(gen_img, caption=f"Class {label}"))
+            wandb.log({"eval_images": images_to_log}, step=epoch)
 
         # distributed save
         for b_id in range(sampled_images.size(0)):
@@ -220,6 +228,8 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         )
         fid = metrics_dict['frechet_inception_distance']
         inception_score = metrics_dict['inception_score_mean']
+        if misc.is_main_process():
+            wandb.log({"fid": fid, "inception_score": inception_score}, step=epoch)
         postfix = ""
         if use_ema:
            postfix = postfix + "_ema"

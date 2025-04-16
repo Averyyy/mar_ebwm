@@ -7,3 +7,5 @@
 #SBATCH --gpu-bind=verbose,closest
 #SBATCH --mem-per-cpu=3G
 #SBATCH --cpus-per-task=8
+
+source activate mar

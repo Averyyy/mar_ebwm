@@ -4,7 +4,6 @@
 #SBATCH --time=06:00:00
 #SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm_coding/logs/slurm_outputs/mar-2xs-%j.out
 
-source activate mar
 cd /work/hdd/bdta/aqian1/mar_ebwm
 
 torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=4738 main_mar.py \
