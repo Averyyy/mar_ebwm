@@ -282,7 +282,7 @@ def main(args):
     model.to(device)
     model_without_ddp = model
 
-    eff_batch_size = args.batch_size * misc.get_world_size()
+    eff_batch_size = args.batch_size * misc.get_world_size() * args.grad_accu
     
     if args.lr is None:  # only base_lr is specified
         args.lr = args.blr * eff_batch_size / 256
@@ -310,7 +310,7 @@ def main(args):
 
     # resume training
     if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
-        checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu')
+        checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
         model_without_ddp.load_state_dict(checkpoint['model'])
         model_params = list(model_without_ddp.parameters())
         ema_state_dict = checkpoint['model_ema']

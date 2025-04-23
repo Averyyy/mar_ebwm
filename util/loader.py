@@ -47,7 +47,18 @@ class CachedFolder(datasets.DatasetFolder):
         """
         path, target = self.samples[index]
 
-        data = np.load(path)
+        # data = np.load(path)
+        try:
+            data = np.load(path)
+        except (EOFError, ValueError, OSError) as e:
+            print(f"[Warning] Cant load {path}, error: {e}. Skipping")
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            new_idx = (index + 1) % len(self)
+            return self.__getitem__(new_idx)
+        
         if torch.rand(1) < 0.5:  # randomly hflip
             moments = data['moments']
         else:

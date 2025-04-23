@@ -15,6 +15,8 @@ import os
 import copy
 import time
 
+import wandb
+
 
 def update_ema(target_params, source_params, rate=0.99):
     """
@@ -45,7 +47,11 @@ def train_one_epoch(model, vae,
 
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
-
+        
+    accum_steps = args.grad_accu 
+    loss_sum = 0.0
+    batch_count = 0
+    
     for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
         # we use a per iteration (instead of per epoch) lr scheduler
@@ -67,26 +73,36 @@ def train_one_epoch(model, vae,
         # forward
         with torch.cuda.amp.autocast():
             loss = model(x, labels)
+            loss = loss / accum_steps
 
         loss_value = loss.item()
+        loss_sum += loss_value * accum_steps #for logging
+        batch_count += 1
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
 
-        loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True)
-        optimizer.zero_grad()
+        loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=False, do_backward=True)
+        if (data_iter_step + 1) % accum_steps == 0 or (data_iter_step + 1) == len(data_loader):
+            loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True, do_backward=False)
+            optimizer.zero_grad()
+
+            avg_loss = loss_sum / batch_count
+            metric_logger.update(loss=avg_loss)
+            loss_sum = 0.0
+            batch_count = 0
 
         torch.cuda.synchronize()
 
         update_ema(ema_params, model_params, rate=args.ema_rate)
 
-        metric_logger.update(loss=loss_value)
+        metric_logger.update(loss=loss_value * accum_steps)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
-        loss_value_reduce = misc.all_reduce_mean(loss_value)
+        loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
         if log_writer is not None:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
@@ -152,7 +168,8 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
 
         # generation
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
+            # with torch.cuda.amp.autocast():
+            with torch.cuda.amp.autocast(enabled=False):
                 sampled_tokens = model_without_ddp.sample_tokens(bsz=batch_size, num_iter=args.num_iter, cfg=cfg,
                                                                  cfg_schedule=args.cfg_schedule, labels=labels_gen,
                                                                  temperature=args.temperature)
@@ -168,6 +185,19 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         torch.distributed.barrier()
         sampled_images = sampled_images.detach().cpu()
         sampled_images = (sampled_images + 1) / 2
+        print("sampled_images shape:", sampled_images.shape)
+        print("sampled_images", sampled_images)
+        print("min:", sampled_images.min().item(), "max:", sampled_images.max().item(), "mean:", sampled_images.mean().item())
+        if torch.isnan(sampled_images).any() or torch.isinf(sampled_images).any():
+            print("nan detacted!")
+        
+        if misc.is_main_process() and i == 0:
+            images_to_log = []
+            for b_id in range(min(5, sampled_images.size(0))):
+                gen_img = np.round(np.clip(sampled_images[b_id].numpy().transpose([1, 2, 0]) * 255, 0, 255))
+                label = labels_gen[b_id].item()
+                images_to_log.append(wandb.Image(gen_img, caption=f"Class {label}"))
+            wandb.log({"eval_images": images_to_log}, step=epoch)
 
         # distributed save
         for b_id in range(sampled_images.size(0)):
@@ -206,6 +236,8 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         )
         fid = metrics_dict['frechet_inception_distance']
         inception_score = metrics_dict['inception_score_mean']
+        if misc.is_main_process():
+            wandb.log({"fid": fid, "inception_score": inception_score}, step=epoch)
         postfix = ""
         if use_ema:
            postfix = postfix + "_ema"
@@ -225,26 +257,54 @@ def cache_latents(vae,
                   data_loader: Iterable,
                   device: torch.device,
                   args=None):
+    import os
+    import numpy as np
+    import torch
+    import util.misc as misc
+
     metric_logger = misc.MetricLogger(delimiter="  ")
     header = 'Caching: '
     print_freq = 20
 
+    last_idx_file = os.path.join(args.cached_path, 'last_idx.txt')
+    start_iter = 0
+    if os.path.exists(last_idx_file):
+        try:
+            start_iter = int(open(last_idx_file, 'r').read().strip())
+        except Exception:
+            start_iter = 0
+
     for data_iter_step, (samples, _, paths) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        if data_iter_step < start_iter:
+            continue
 
         samples = samples.to(device, non_blocking=True)
 
-        with torch.no_grad():
-            posterior = vae.encode(samples)
-            moments = posterior.parameters
-            posterior_flip = vae.encode(samples.flip(dims=[3]))
-            moments_flip = posterior_flip.parameters
+        try:
+            with torch.no_grad():
+                posterior = vae.encode(samples)
+                moments = posterior.parameters
+                posterior_flip = vae.encode(samples.flip(dims=[3]))
+                moments_flip = posterior_flip.parameters
 
-        for i, path in enumerate(paths):
-            save_path = os.path.join(args.cached_path, path + '.npz')
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            np.savez(save_path, moments=moments[i].cpu().numpy(), moments_flip=moments_flip[i].cpu().numpy())
+            for i, path in enumerate(paths):
+                save_path = os.path.join(args.cached_path, path + '.npz')
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                np.savez(save_path,
+                         moments=moments[i].cpu().numpy(),
+                         moments_flip=moments_flip[i].cpu().numpy())
 
-        if misc.is_dist_avail_and_initialized():
-            torch.cuda.synchronize()
+            if misc.is_dist_avail_and_initialized():
+                torch.cuda.synchronize()
+
+        except Exception as e:
+            print(f"[Warning] batch {data_iter_step} warning，paths={paths}，skip：{e}")
+            with open(last_idx_file, 'w') as f:
+                f.write(str(data_iter_step + 1))
+            continue
+
+        with open(last_idx_file, 'w') as f:
+            f.write(str(data_iter_step + 1))
 
     return
+

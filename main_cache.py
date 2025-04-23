@@ -51,6 +51,8 @@ def get_args_parser():
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
+    parser.add_argument('--effective_img_size', default=256, type=int,
+                        help='effective image size caching')
 
     # caching latents
     parser.add_argument('--cached_path', default='', help='path to cached latents')
@@ -79,6 +81,8 @@ def main(args):
     # augmentation following DiT and ADM
     transform_train = transforms.Compose([
         transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.img_size)),
+        # resize to effective image size
+        transforms.Resize((args.effective_img_size, args.effective_img_size)),
         # transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
@@ -99,6 +103,9 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=False,  # Don't drop in cache
     )
+    batch = next(iter(data_loader_train))
+    print(f"Input image shape: {batch[0].shape}")
+
 
     # define the vae
     vae = AutoencoderKL(embed_dim=args.vae_embed_dim, ch_mult=(1, 1, 2, 2, 4), ckpt_path=args.vae_path).cuda().eval()
