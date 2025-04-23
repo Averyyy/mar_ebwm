@@ -168,7 +168,8 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
 
         # generation
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
+            # with torch.cuda.amp.autocast():
+            with torch.cuda.amp.autocast(enabled=False):
                 sampled_tokens = model_without_ddp.sample_tokens(bsz=batch_size, num_iter=args.num_iter, cfg=cfg,
                                                                  cfg_schedule=args.cfg_schedule, labels=labels_gen,
                                                                  temperature=args.temperature)
@@ -184,6 +185,8 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         torch.distributed.barrier()
         sampled_images = sampled_images.detach().cpu()
         sampled_images = (sampled_images + 1) / 2
+        print("sampled_images shape:", sampled_images.shape)
+        print("sampled_images", sampled_images)
         print("min:", sampled_images.min().item(), "max:", sampled_images.max().item(), "mean:", sampled_images.mean().item())
         if torch.isnan(sampled_images).any() or torch.isinf(sampled_images).any():
             print("nan detacted!")
@@ -254,26 +257,54 @@ def cache_latents(vae,
                   data_loader: Iterable,
                   device: torch.device,
                   args=None):
+    import os
+    import numpy as np
+    import torch
+    import util.misc as misc
+
     metric_logger = misc.MetricLogger(delimiter="  ")
     header = 'Caching: '
     print_freq = 20
 
+    last_idx_file = os.path.join(args.cached_path, 'last_idx.txt')
+    start_iter = 0
+    if os.path.exists(last_idx_file):
+        try:
+            start_iter = int(open(last_idx_file, 'r').read().strip())
+        except Exception:
+            start_iter = 0
+
     for data_iter_step, (samples, _, paths) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        if data_iter_step < start_iter:
+            continue
 
         samples = samples.to(device, non_blocking=True)
 
-        with torch.no_grad():
-            posterior = vae.encode(samples)
-            moments = posterior.parameters
-            posterior_flip = vae.encode(samples.flip(dims=[3]))
-            moments_flip = posterior_flip.parameters
+        try:
+            with torch.no_grad():
+                posterior = vae.encode(samples)
+                moments = posterior.parameters
+                posterior_flip = vae.encode(samples.flip(dims=[3]))
+                moments_flip = posterior_flip.parameters
 
-        for i, path in enumerate(paths):
-            save_path = os.path.join(args.cached_path, path + '.npz')
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            np.savez(save_path, moments=moments[i].cpu().numpy(), moments_flip=moments_flip[i].cpu().numpy())
+            for i, path in enumerate(paths):
+                save_path = os.path.join(args.cached_path, path + '.npz')
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                np.savez(save_path,
+                         moments=moments[i].cpu().numpy(),
+                         moments_flip=moments_flip[i].cpu().numpy())
 
-        if misc.is_dist_avail_and_initialized():
-            torch.cuda.synchronize()
+            if misc.is_dist_avail_and_initialized():
+                torch.cuda.synchronize()
+
+        except Exception as e:
+            print(f"[Warning] batch {data_iter_step} warning，paths={paths}，skip：{e}")
+            with open(last_idx_file, 'w') as f:
+                f.write(str(data_iter_step + 1))
+            continue
+
+        with open(last_idx_file, 'w') as f:
+            f.write(str(data_iter_step + 1))
 
     return
+

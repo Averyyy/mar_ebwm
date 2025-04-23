@@ -8,7 +8,7 @@
 #SBATCH --mem-per-cpu=1G
 #SBATCH --cpus-per-task=72
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=2
+#SBATCH --gpus-per-node=1
 #SBATCH --time=24:00:00
 #SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm_coding/logs/slurm_outputs/mar-base-2048-%j.out
 
