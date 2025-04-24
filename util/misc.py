@@ -164,6 +164,7 @@ class MetricLogger(object):
                     "time": float(iter_time.value),  
                     "data": float(data_time.value),             # or global_avg
                     "max_mem": float(torch.cuda.max_memory_allocated() / MB),
+                    "mcmc step size": float(self.meters["mcmc_step_size"].value),
                 })
 
             i += 1

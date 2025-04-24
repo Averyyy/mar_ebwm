@@ -29,8 +29,8 @@ class AdaLNResBlock(nn.Module):
 
 class EnergyMLP(nn.Module):
     """Energy-based MLP with AdaLN, conditioned on z"""
-    def __init__(self, token_embed_dim, z_dim, hidden_dim=1024, depth=6, mcmc_num_steps=2, 
-                 alpha=.1, langevin_noise_std=0, reconstruction_coeff=1.0, grad_checkpointing=False):
+    def __init__(self, token_embed_dim, z_dim, hidden_dim=1024, depth=3, mcmc_num_steps=2, 
+                 alpha=.01, langevin_noise_std=0, reconstruction_coeff=1.0, grad_checkpointing=False):
         super().__init__()
         self.token_embed_dim = token_embed_dim
         self.z_dim = z_dim
@@ -73,7 +73,7 @@ class EnergyMLP(nn.Module):
         predicted_energies_list = []
         
         alpha = torch.clamp(self.alpha, min=0.0001)
-        langevin_noise_std = torch.clamp(self.langevin_noise_std, min=0.000001)
+        # langevin_noise_std = torch.clamp(self.langevin_noise_std, min=0.000001)
 
         # Initialize predicted embeddings as pure noise
         predicted_embeddings = torch.randn(B, S, self.token_embed_dim, device=z.device)

@@ -149,7 +149,7 @@ def get_args_parser():
     
     # DEBT-specific parameters
     parser.add_argument('--mcmc_num_steps', default=10, type=int, help='[DEBT] Number of MCMC steps')
-    parser.add_argument('--mcmc_step_size', default=0.1, type=float, help='[DEBT] MCMC step size')
+    parser.add_argument('--mcmc_step_size', default=0.01, type=float, help='[DEBT] MCMC step size')
     parser.add_argument('--langevin_dynamics_noise', default=0.01, type=float, help='[DEBT] Langevin dynamics noise std')
     parser.add_argument('--denoising_initial_condition', default='random_noise', type=str, 
                         choices=['random_noise', 'most_recent_embedding', 'zeros'], 
@@ -157,6 +157,9 @@ def get_args_parser():
     
     parser.add_argument('--grad_accu', default=1, type=int,
                     help='Number of gradient accumulation steps')
+    
+    parser.add_argument('--mcmc_step_size_lr_multiplier', default=1, type=float,
+                    help='Learning rate multiplier for MCMC step size of energymlp')
 
     return parser
 
@@ -267,11 +270,8 @@ def main(args):
             attn_dropout=args.attn_dropout,
             proj_dropout=args.proj_dropout,
             buffer_size=args.buffer_size,
-            diffloss_d=args.diffloss_d,
-            diffloss_w=args.diffloss_w,
-            num_sampling_steps=args.num_sampling_steps,
-            diffusion_batch_mul=args.diffusion_batch_mul,
             grad_checkpointing=args.grad_checkpointing,
+            mcmc_step_size=args.mcmc_step_size,
         )
 
     print("Model = %s" % str(model))
@@ -296,7 +296,6 @@ def main(args):
         model_without_ddp = model.module
 
     # no weight decay on bias, norm layers, and diffloss MLP    (legacy for mar)
-    args.mcmc_step_size_lr_multiplier = 2
     param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay, (), args)
     # alpha_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' in name]
     # other_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' not in name]
