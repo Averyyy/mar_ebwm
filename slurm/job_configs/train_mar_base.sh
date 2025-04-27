@@ -1,5 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=mar-base-1k-64
+#SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm_outputs/mar-base-1k-64-%j.out
+#SBATCH --time=24:00:00
+
+
 
 
 cd /work/hdd/bdta/aqian1/mar_ebwm_coding

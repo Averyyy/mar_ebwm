@@ -101,7 +101,10 @@ def train_one_epoch(model, vae,
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
-        metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
+        if args.model_type == "debt":
+            metric_logger.update(mcmc_step_size=model.module.alpha.item())
+        else:
+            metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
 
         loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
         if log_writer is not None:
@@ -223,7 +226,8 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
             input2 = None
             fid_statistics_file = 'fid_stats/adm_in256_stats.npz'
         else:
-            raise NotImplementedError
+            # raise NotImplementedError
+            pass
         metrics_dict = torch_fidelity.calculate_metrics(
             input1=save_folder,
             input2=input2,

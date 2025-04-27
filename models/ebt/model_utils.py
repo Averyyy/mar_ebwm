@@ -7,7 +7,7 @@ import torch.optim as optim
 import traceback
 from torchvision.transforms import functional as TF
 import torchvision.models as models
-from diffusers import AutoencoderKL
+# from diffusers import AutoencoderKL
 import math
 import random
 import numpy as np
@@ -211,7 +211,7 @@ def scale_clamp(tensor, min_value, max_value):
     return scaled_tensor
 
 def load_trained_pl_model(ckpt_path, new_hparams, for_inference = False):
-    from base_model_trainer import ModelTrainer
+    # from base_model_trainer import ModelTrainer
     checkpoint = torch.load(ckpt_path, weights_only=False)
     model = ModelTrainer(new_hparams)
     model.load_state_dict(checkpoint['state_dict'])
@@ -249,24 +249,24 @@ def init_whole_model_weights(model, weight_initialization_method, nonlinearity='
     model.apply(init_weights)
 
 
-def load_image_encoder(backbone_type, backbone_size):
-    vit_backbone_archs = {
-        "small": "vits14",
-        "base": "vitb14",
-        "large": "vitl14",
-        "giant": "vitg14",
-    }
+# def load_image_encoder(backbone_type, backbone_size):
+#     vit_backbone_archs = {
+#         "small": "vits14",
+#         "base": "vitb14",
+#         "large": "vitl14",
+#         "giant": "vitg14",
+#     }
         
-    if backbone_type == 'dinov2':
-        backbone_name = vit_backbone_archs[backbone_size]
-        backbone = torch.hub.load('facebookresearch/dinov2', model=f"dinov2_{backbone_name}")
-        del backbone._parameters['mask_token'] # this is done as this param was unused and was causing pl ddp unused param issues
-        return backbone
-    elif backbone_type == "vae":
-        vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
-        return vae
-    else:
-        raise NotImplementedError(f"Unspported backbone type: {backbone_type}")
+#     if backbone_type == 'dinov2':
+#         backbone_name = vit_backbone_archs[backbone_size]
+#         backbone = torch.hub.load('facebookresearch/dinov2', model=f"dinov2_{backbone_name}")
+#         del backbone._parameters['mask_token'] # this is done as this param was unused and was causing pl ddp unused param issues
+#         return backbone
+#     elif backbone_type == "vae":
+#         vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
+#         return vae
+#     else:
+#         raise NotImplementedError(f"Unspported backbone type: {backbone_type}")
     
 def get_encoded_images(batch, backbone_type, image_encoder):
     if backbone_type == 'dinov2':

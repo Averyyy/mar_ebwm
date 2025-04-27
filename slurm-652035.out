@@ -1,0 +1,339 @@
+/var/spool/slurmd/job652035/slurm_script: line 15: activate: No such file or directory
+W0424 01:11:31.533000 995186 site-packages/torch/distributed/run.py:766] 
+W0424 01:11:31.533000 995186 site-packages/torch/distributed/run.py:766] *****************************************
+W0424 01:11:31.533000 995186 site-packages/torch/distributed/run.py:766] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0424 01:11:31.533000 995186 site-packages/torch/distributed/run.py:766] *****************************************
+| distributed init (rank 0): env://, gpu 0
+| distributed init (rank 2): env://, gpu 2
+| distributed init (rank 3): env://, gpu 3
+| distributed init (rank 1): env://, gpu 1
+[rank1]:[W424 01:11:50.374235653 ProcessGroupNCCL.cpp:4693] [PG ID 0 PG GUID 0 Rank 1]  using GPU 1 as device used by this process is currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect. You can pecify device_id in init_process_group() to force use of a particular device.
+[rank0]:[W424 01:11:50.377444679 ProcessGroupNCCL.cpp:4693] [PG ID 0 PG GUID 0 Rank 0]  using GPU 0 as device used by this process is currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect. You can pecify device_id in init_process_group() to force use of a particular device.
+[rank3]:[W424 01:11:50.381204377 ProcessGroupNCCL.cpp:4693] [PG ID 0 PG GUID 0 Rank 3]  using GPU 3 as device used by this process is currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect. You can pecify device_id in init_process_group() to force use of a particular device.
+[rank2]:[W424 01:11:50.391347056 ProcessGroupNCCL.cpp:4693] [PG ID 0 PG GUID 0 Rank 2]  using GPU 2 as device used by this process is currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect. You can pecify device_id in init_process_group() to force use of a particular device.
+wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+wandb: Currently logged in as: averyyy (ebwm_nlp) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.19.9
+wandb: Run data is saved locally in /work/hdd/bdta/aqian1/mar_ebwm_coding/wandb/run-20250424_011155-xlcgyx8a
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run mar-base-1k-64
+wandb: ⭐️ View project at https://wandb.ai/ebwm_nlp/ebwm-mar
+wandb: 🚀 View run at https://wandb.ai/ebwm_nlp/ebwm-mar/runs/xlcgyx8a
+[01:11:55.988414] job dir: /work/hdd/bdta/aqian1/mar_ebwm_coding
+[01:11:55.988782] Namespace(batch_size=512,
+epochs=100,
+model='mar_base',
+img_size=64,
+vae_path='/work/hdd/bdta/aqian1/mar_ebwm/pretrained_models/vae/kl16.ckpt',
+vae_embed_dim=16,
+vae_stride=16,
+patch_size=1,
+num_iter=64,
+num_images=1000,
+cfg=1.0,
+cfg_schedule='linear',
+label_drop_prob=0.1,
+eval_freq=50,
+save_last_freq=5,
+online_eval=True,
+evaluate=False,
+eval_bsz=64,
+weight_decay=0.02,
+grad_checkpointing=False,
+lr=None,
+blr=0.0003,
+min_lr=0.0,
+lr_schedule='constant',
+warmup_epochs=10,
+ema_rate=0.9999,
+mask_ratio_min=0.7,
+grad_clip=3.0,
+attn_dropout=0.1,
+proj_dropout=0.1,
+buffer_size=64,
+diffloss_d=3,
+diffloss_w=1024,
+num_sampling_steps='100',
+diffusion_batch_mul=4,
+temperature=1.0,
+data_path='./data/imagenet',
+class_num=1000,
+output_dir='/work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64',
+log_dir='/work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64',
+device='cuda',
+seed=1,
+resume='/work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64',
+start_epoch=0,
+num_workers=10,
+pin_mem=True,
+world_size=4,
+local_rank=-1,
+dist_on_itp=False,
+dist_url='env://',
+use_cached=True,
+cached_path='/work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64',
+model_type='mar',
+run_name='mar-base-1k-64',
+embed_dim=1024,
+depth=16,
+num_heads=16,
+mlp_ratio=4.0,
+learn_sigma=False,
+mcmc_num_steps=10,
+mcmc_step_size=0.1,
+langevin_dynamics_noise=0.01,
+denoising_initial_condition='random_noise',
+grad_accu=1,
+rank=0,
+gpu=0,
+distributed=True,
+dist_backend='nccl')
+[01:11:57.887735] Dataset CachedFolder
+    Number of datapoints: 1281153
+    Root location: /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64
+[01:11:57.892066] Sampler_train = <torch.utils.data.distributed.DistributedSampler object at 0xfffb72b93e90>
+[01:11:57.978902] Working with z of shape (1, 16, 16, 16) = 4096 dimensions.
+[01:12:00.419513] Loading pre-trained KL-VAE
+[01:12:00.420134] Missing keys:
+[01:12:00.420363] []
+[01:12:00.420558] Unexpected keys:
+[01:12:00.420750] []
+[01:12:00.420947] Restored from /work/hdd/bdta/aqian1/mar_ebwm/pretrained_models/vae/kl16.ckpt
+[01:12:04.932398] Model = MAR(
+  (class_emb): Embedding(1000, 768)
+  (z_proj): Linear(in_features=16, out_features=768, bias=True)
+  (z_proj_ln): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+  (encoder_blocks): ModuleList(
+    (0-11): 12 x Block(
+      (norm1): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+      (attn): Attention(
+        (qkv): Linear(in_features=768, out_features=2304, bias=True)
+        (q_norm): Identity()
+        (k_norm): Identity()
+        (attn_drop): Dropout(p=0.1, inplace=False)
+        (proj): Linear(in_features=768, out_features=768, bias=True)
+        (proj_drop): Dropout(p=0.1, inplace=False)
+      )
+      (ls1): Identity()
+      (drop_path1): Identity()
+      (norm2): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+      (mlp): Mlp(
+        (fc1): Linear(in_features=768, out_features=3072, bias=True)
+        (act): GELU(approximate='none')
+        (drop1): Dropout(p=0.1, inplace=False)
+        (norm): Identity()
+        (fc2): Linear(in_features=3072, out_features=768, bias=True)
+        (drop2): Dropout(p=0.1, inplace=False)
+      )
+      (ls2): Identity()
+      (drop_path2): Identity()
+    )
+  )
+  (encoder_norm): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+  (decoder_embed): Linear(in_features=768, out_features=768, bias=True)
+  (decoder_blocks): ModuleList(
+    (0-11): 12 x Block(
+      (norm1): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+      (attn): Attention(
+        (qkv): Linear(in_features=768, out_features=2304, bias=True)
+        (q_norm): Identity()
+        (k_norm): Identity()
+        (attn_drop): Dropout(p=0.1, inplace=False)
+        (proj): Linear(in_features=768, out_features=768, bias=True)
+        (proj_drop): Dropout(p=0.1, inplace=False)
+      )
+      (ls1): Identity()
+      (drop_path1): Identity()
+      (norm2): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+      (mlp): Mlp(
+        (fc1): Linear(in_features=768, out_features=3072, bias=True)
+        (act): GELU(approximate='none')
+        (drop1): Dropout(p=0.1, inplace=False)
+        (norm): Identity()
+        (fc2): Linear(in_features=3072, out_features=768, bias=True)
+        (drop2): Dropout(p=0.1, inplace=False)
+      )
+      (ls2): Identity()
+      (drop_path2): Identity()
+    )
+  )
+  (decoder_norm): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+  (diffloss): DiffLoss(
+    (net): SimpleMLPAdaLN(
+      (time_embed): TimestepEmbedder(
+        (mlp): Sequential(
+          (0): Linear(in_features=256, out_features=1024, bias=True)
+          (1): SiLU()
+          (2): Linear(in_features=1024, out_features=1024, bias=True)
+        )
+      )
+      (cond_embed): Linear(in_features=768, out_features=1024, bias=True)
+      (input_proj): Linear(in_features=16, out_features=1024, bias=True)
+      (res_blocks): ModuleList(
+        (0-2): 3 x ResBlock(
+          (in_ln): LayerNorm((1024,), eps=1e-06, elementwise_affine=True)
+          (mlp): Sequential(
+            (0): Linear(in_features=1024, out_features=1024, bias=True)
+            (1): SiLU()
+            (2): Linear(in_features=1024, out_features=1024, bias=True)
+          )
+          (adaLN_modulation): Sequential(
+            (0): SiLU()
+            (1): Linear(in_features=1024, out_features=3072, bias=True)
+          )
+        )
+      )
+      (final_layer): FinalLayer(
+        (norm_final): LayerNorm((1024,), eps=1e-06, elementwise_affine=False)
+        (linear): Linear(in_features=1024, out_features=32, bias=True)
+        (adaLN_modulation): Sequential(
+          (0): SiLU()
+          (1): Linear(in_features=1024, out_features=2048, bias=True)
+        )
+      )
+    )
+  )
+)
+[01:12:04.933782] Number of trainable parameters: 191.621664M
+[01:12:04.957907] base lr: 3.00e-04
+[01:12:04.958286] actual lr: 2.40e-03
+[01:12:04.958479] effective batch size: 2048
+[01:12:05.008074] AdamW (
+Parameter Group 0
+    amsgrad: False
+    betas: (0.9, 0.95)
+    capturable: False
+    decoupled_weight_decay: True
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.0024
+    maximize: False
+    weight_decay: 0.0
+
+Parameter Group 1
+    amsgrad: False
+    betas: (0.9, 0.95)
+    capturable: False
+    decoupled_weight_decay: True
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.0024
+    maximize: False
+    weight_decay: 0.02
+)
+/work/hdd/bdta/aqian1/mar_ebwm_coding/util/misc.py:270: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self._scaler = torch.cuda.amp.GradScaler()
+/work/hdd/bdta/aqian1/mar_ebwm_coding/util/misc.py:270: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self._scaler = torch.cuda.amp.GradScaler()
+/work/hdd/bdta/aqian1/mar_ebwm_coding/util/misc.py:270: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self._scaler = torch.cuda.amp.GradScaler()
+/work/hdd/bdta/aqian1/mar_ebwm_coding/util/misc.py:270: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self._scaler = torch.cuda.amp.GradScaler()
+[01:12:05.805749] Traceback (most recent call last):
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 379, in <module>
+[rank1]:     main(args)
+[rank1]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 306, in main
+[rank1]:     checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
+[rank1]:                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 1482, in load
+[rank1]:     with _open_zipfile_reader(opened_file) as opened_zipfile:
+[rank1]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 771, in __init__
+[rank1]:     super().__init__(torch._C.PyTorchFileReader(name_or_buffer))
+[rank1]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]: RuntimeError: PytorchStreamReader failed reading zip archive: failed finding central directory
+[rank2]: Traceback (most recent call last):
+[rank2]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 379, in <module>
+[rank2]:     main(args)
+[rank2]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 306, in main
+[rank2]:     checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
+[rank2]:                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 1482, in load
+[rank2]:     with _open_zipfile_reader(opened_file) as opened_zipfile:
+[rank2]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 771, in __init__
+[rank2]:     super().__init__(torch._C.PyTorchFileReader(name_or_buffer))
+[rank2]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]: RuntimeError: PytorchStreamReader failed reading zip archive: failed finding central directory
+[rank3]: Traceback (most recent call last):
+[rank3]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 379, in <module>
+[rank3]:     main(args)
+[rank3]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 306, in main
+[rank3]:     checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
+[rank3]:                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 1482, in load
+[rank3]:     with _open_zipfile_reader(opened_file) as opened_zipfile:
+[rank3]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 771, in __init__
+[rank3]:     super().__init__(torch._C.PyTorchFileReader(name_or_buffer))
+[rank3]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]: RuntimeError: PytorchStreamReader failed reading zip archive: failed finding central directory
+[01:12:05.806237]   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 379, in <module>
+    main(args)
+[01:12:05.806485]   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 306, in main
+    checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[01:12:05.806700]   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 1482, in load
+    with _open_zipfile_reader(opened_file) as opened_zipfile:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[01:12:05.806910]   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 771, in __init__
+    super().__init__(torch._C.PyTorchFileReader(name_or_buffer))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[01:12:05.807142] RuntimeError: PytorchStreamReader failed reading zip archive: failed finding central directory
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 379, in <module>
+[rank0]:     main(args)
+[rank0]:   File "/work/hdd/bdta/aqian1/mar_ebwm_coding/main_mar.py", line 306, in main
+[rank0]:     checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
+[rank0]:                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 1482, in load
+[rank0]:     with _open_zipfile_reader(opened_file) as opened_zipfile:
+[rank0]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/serialization.py", line 771, in __init__
+[rank0]:     super().__init__(torch._C.PyTorchFileReader(name_or_buffer))
+[rank0]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: RuntimeError: PytorchStreamReader failed reading zip archive: failed finding central directory
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mmar-base-1k-64[0m at: [34mhttps://wandb.ai/ebwm_nlp/ebwm-mar/runs/xlcgyx8a[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20250424_011155-xlcgyx8a/logs[0m
+W0424 01:12:07.684000 995186 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 995252 closing signal SIGTERM
+W0424 01:12:07.685000 995186 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 995254 closing signal SIGTERM
+W0424 01:12:07.685000 995186 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 995255 closing signal SIGTERM
+E0424 01:12:07.950000 995186 site-packages/torch/distributed/elastic/multiprocessing/api.py:874] failed (exitcode: 1) local_rank: 1 (pid: 995253) of binary: /u/aqian1/.conda/envs/mar_gh200/bin/python3.11
+Traceback (most recent call last):
+  File "/u/aqian1/.conda/envs/mar_gh200/bin/torchrun", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 355, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in main
+    run(args)
+  File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/u/aqian1/.conda/envs/mar_gh200/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 270, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+main_mar.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2025-04-24_01:12:07
+  host      : gh084.hsn.cm.delta.internal.ncsa.edu
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 995253)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================

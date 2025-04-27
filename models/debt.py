@@ -1,16 +1,16 @@
 import torch
 import torch.nn as nn
 import numpy as np
-import math
 from functools import partial
 
 from models.ebt.ebt_adaln import EBTAdaLN
 from models.ebt.model_utils import EBTModelArgs
 
+
 class DEBT(nn.Module):
+    """Diffusion Energy‑Based Transformer (DEBT) – incremental fixes.
     """
-    Diffusion Energy-Based Transformer (DEBT) 
-    """
+
     def __init__(
         self,
         img_size=256,
@@ -22,199 +22,158 @@ class DEBT(nn.Module):
         mlp_ratio=4.0,
         class_num=1000,
         dropout_prob=0.1,
-        mcmc_num_steps=10,
-        mcmc_step_size=0.1,
+        mcmc_num_steps=2,
+        mcmc_step_size=0.01,
         langevin_dynamics_noise=0.0,
-        denoising_initial_condition='random_noise',
+        denoising_initial_condition="random_noise",
         double_condition=False,
+        training=True,
     ):
         super().__init__()
 
-        # Image and patch dimensions
+        # -------- image / patch ----------
         self.img_size = img_size
         self.vae_stride = vae_stride
         self.vae_embed_dim = 16
         self.patch_size = patch_size
         self.seq_h = self.seq_w = img_size // vae_stride // patch_size
-        self.seq_len = self.seq_h * self.seq_w
-        self.token_embed_dim = 16 * patch_size**2  # VAE latent dimension * patch_size^2
+        self.seq_len = self.seq_h * self.seq_w  # S
+        self.token_embed_dim = 16 * patch_size ** 2
         self.embed_dim = embed_dim
+
         self.mcmc_num_steps = mcmc_num_steps
         self.langevin_dynamics_noise = langevin_dynamics_noise
         self.denoising_initial_condition = denoising_initial_condition
-
-        # MCMC step size learnable
-        self.alpha = nn.Parameter(torch.tensor(mcmc_step_size), requires_grad=True)
+        self.alpha = nn.Parameter(torch.tensor(float(mcmc_step_size)), requires_grad=True)
 
         self.y_embedder = nn.Embedding(class_num + 1, embed_dim)
-
-        # Positional embeddings
-        self.pos_embed = nn.Parameter(torch.zeros(1, 2 * self.seq_len + 2, embed_dim))  # +2 用于 <s> 和 </s>
-
+        self.pos_embed = nn.Parameter(torch.zeros(1, 2 * self.seq_len + 2, embed_dim))
         self.start_token = nn.Parameter(torch.randn(1, embed_dim))
         self.end_token = nn.Parameter(torch.randn(1, embed_dim))
-
-        self.input_proj = nn.Linear(self.token_embed_dim, embed_dim, bias=True)
-        self.output_proj = nn.Linear(embed_dim, self.token_embed_dim, bias=True)
-
-        self.dropout_prob = dropout_prob
         self.double_condition = double_condition
 
-        # Create EBT transformer with AdaLN
-        transformer_args = EBTModelArgs(
+        self.input_proj = nn.Linear(self.token_embed_dim, embed_dim)
+        self.output_proj = nn.Linear(embed_dim, self.token_embed_dim)
+
+        t_args = EBTModelArgs(
             dim=embed_dim,
             n_layers=depth,
             n_heads=num_heads,
             ffn_dim_multiplier=mlp_ratio,
             adaln_zero_init=False,
-            max_seq_len=2 * self.seq_len + 2,  # <s> + x_gt + predicted_embeddings + </s>
-            final_output_dim=1,  # Energy prediction
+            max_seq_len=2 * self.seq_len + 2,
+            final_output_dim=1,
         )
+        self.transformer = EBTAdaLN(params=t_args, max_mcmc_steps=mcmc_num_steps)
+        self.training = training
 
-        self.transformer = EBTAdaLN(
-            params=transformer_args,
-            max_mcmc_steps=mcmc_num_steps
-        )
+        self._init_weights()
 
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        # Initialize embedders
-        nn.init.normal_(self.y_embedder.weight, std=0.02)
-        # Initialize positional embeddings
-        nn.init.normal_(self.pos_embed, std=0.02)
-
-        # Initialize projections
+    def _init_weights(self):
+        nn.init.normal_(self.y_embedder.weight, 0, 0.02)
+        nn.init.normal_(self.pos_embed, 0, 0.02)
+        nn.init.normal_(self.start_token, 0, 0.02)
+        nn.init.normal_(self.end_token, 0, 0.02)
         nn.init.xavier_uniform_(self.input_proj.weight)
         nn.init.constant_(self.input_proj.bias, 0)
         nn.init.xavier_uniform_(self.output_proj.weight)
         nn.init.constant_(self.output_proj.bias, 0)
 
-        nn.init.normal_(self.start_token, std=0.02)
-        nn.init.normal_(self.end_token, std=0.02)
-
     def patchify(self, x):
-        """Convert a batch of latent embeddings to patches"""
-        bsz, c, h, w = x.shape
+        B, C, H, W = x.shape
         p = self.patch_size
-        h_, w_ = h // p, w // p
-        x = x.reshape(bsz, c, h_, p, w_, p)
-        x = torch.einsum('nchpwq->nhwcpq', x)
-        x = x.reshape(bsz, h_ * w_, c * p ** 2)
-        return x
+        h, w = H // p, W // p
+        x = x.reshape(B, C, h, p, w, p)
+        x = torch.einsum("nchpwq->nhwcpq", x)
+        return x.reshape(B, h * w, -1)
 
     def unpatchify(self, x):
-        """Convert patches back to a batch of latent embeddings"""
-        bsz = x.shape[0]
+        B = x.size(0)
         p = self.patch_size
         c = self.vae_embed_dim
-        h_, w_ = self.seq_h, self.seq_w
-        x = x.reshape(bsz, h_, w_, c, p, p)
-        x = torch.einsum('nhwcpq->nchpwq', x)
-        x = x.reshape(bsz, c, h_ * p, w_ * p)
-        return x
+        h = w = self.seq_h
+        x = x.reshape(B, h, w, c, p, p)
+        x = torch.einsum("nhwcpq->nchpwq", x)
+        return x.reshape(B, c, h * p, w * p)
 
-    def corrupt_embeddings(self, shape):
-        """Corrupt embeddings to initialize predicted_embeddings."""
-        if self.denoising_initial_condition == "random_noise":
-            return torch.randn(shape, device=shape.device)
-        elif self.denoising_initial_condition == "zeros":
-            return torch.zeros(shape, device=shape.device)
+    def corrupt_embeddings(self, ref_like):
+        if isinstance(ref_like, torch.Tensor):
+            shape = list(ref_like.shape)
+            device, dtype = ref_like.device, ref_like.dtype
         else:
-            raise ValueError(f"{self.denoising_initial_condition} not supported")
+            shape, device, dtype = list(ref_like), None, torch.float32
+        shape[-1] = self.embed_dim
+        if self.denoising_initial_condition == "zeros":
+            return torch.zeros(shape, device=device, dtype=dtype)
+        return torch.randn(shape, device=device, dtype=dtype)
 
-    def refine_embeddings(self, real_embeddings, initial_predicted_embeddings, c, mcmc_step):
-        predicted_embeddings = initial_predicted_embeddings
-        alpha = torch.clamp(self.alpha, min=0.0001)
-        for mcmc_step in range(self.mcmc_num_steps ):
-            with torch.set_grad_enabled(True):
+    def refine_embeddings(self, real_embeddings, predicted_embeddings, c):
+        if predicted_embeddings.shape[-1] == self.token_embed_dim:
+            predicted_embeddings = self.input_proj(predicted_embeddings)
+
+        alpha = torch.clamp(self.alpha, min=1e-4)
+        B = real_embeddings.size(0)
+        s_tok = self.start_token.to(real_embeddings.dtype).unsqueeze(1).expand(B, 1, -1)
+        e_tok = self.end_token.to(real_embeddings.dtype).unsqueeze(1).expand(B, 1, -1)
+        with torch.enable_grad():
+            for step in range(self.mcmc_num_steps):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
-                # <s> + real_embeddings + predicted_embeddings + </s>
-                if self.double_condition:
-                    start_token = self.start_token.expand(real_embeddings.shape[0], -1) + c
+                all_emb = torch.cat([s_tok, real_embeddings, predicted_embeddings, e_tok], 1)
+                pos_slice = self.pos_embed[:, : all_emb.size(1), :]
+                all_emb = all_emb + pos_slice
+                energy = self.transformer(all_emb, 0, mcmc_step=step, c=c)
+                energy_sum = energy.sum()
+                if self.training:
+                    grad = torch.autograd.grad(energy_sum, predicted_embeddings, create_graph=True, retain_graph=True)[0]
                 else:
-                    start_token = self.start_token.expand(real_embeddings.shape[0], -1)
-                end_token = self.end_token.expand(real_embeddings.shape[0], -1)
-                all_embeddings = torch.cat([start_token, real_embeddings, predicted_embeddings, end_token], dim=1)
-                all_embeddings = all_embeddings + self.pos_embed
-                energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=c)
-                energy_sum = energy_preds[:, self.seq_len + 1 : -1].sum() #exclude </s>
-                grad = torch.autograd.grad(
-                    energy_sum, predicted_embeddings, create_graph=True, retain_graph=True
-                )[0]
-
+                    grad = torch.autograd.grad(energy_sum, predicted_embeddings)[0]
                 predicted_embeddings = predicted_embeddings - alpha * grad
-
-                if not self.training and self.langevin_dynamics_noise > 0:
-                    noise = torch.randn_like(predicted_embeddings) * self.langevin_dynamics_noise
-                    predicted_embeddings = predicted_embeddings + noise
-        return predicted_embeddings
+                # if (not self.training) and self.langevin_dynamics_noise > 0:
+                #     predicted_embeddings += torch.randn_like(predicted_embeddings) * self.langevin_dynamics_noise
+        return predicted_embeddings.detach()
 
     def forward(self, x_start, labels):
-        """
-        Args:
-            x_start: (B, C, H, W) - Clean image
-            labels: (B,) - Class labels
-        """
-        bsz = x_start.shape[0]
-        device = x_start.device
+        gt_tokens = self.patchify(x_start)
+        real_emb = self.input_proj(gt_tokens)
+        pred_emb = self.corrupt_embeddings(real_emb)
+        c = self.y_embedder(labels)
+        pred_emb = self.refine_embeddings(real_emb, pred_emb, c)
+        pred_tokens = self.output_proj(pred_emb)
+        recon = self.unpatchify(pred_tokens)
+        return ((recon - x_start) ** 2).mean()
 
-        x_gt_patches = self.patchify(x_start)  # [B, S, token_embed_dim]
-        real_embeddings = self.input_proj(x_gt_patches)  # [B, S, embed_dim]
-
-        initial_predicted_embeddings = self.corrupt_embeddings(x_gt_patches.shape)
-
-        y_emb = self.y_embedder(labels)
-        c = y_emb
-
-        predicted_embeddings = self.refine_embeddings(real_embeddings, initial_predicted_embeddings, c, mcmc_step=0)
-
-        predicted_tokens = self.output_proj(predicted_embeddings)  # [B, S, token_embed_dim]
-        x_0_pred = self.unpatchify(predicted_tokens)  # [B, C, H, W]
-
-        loss = ((x_0_pred - x_start) ** 2).mean()
-        return loss
-
-    def sample_tokens(self, bsz, num_iter=64, cfg=1.0, labels=None, temperature=1.0, progress=False):
-        """
-        Autoregressively sample tokens from the model.
-        Returns:
-            x_0_pred: generated image in latent space
-        """
+    @torch.no_grad()
+    def sample_tokens(self, bsz, num_iter=None, cfg=1.0, labels=None, temperature=1.0, progress=False):
+        print("sampling started")
+        if num_iter is None:
+            num_iter = self.seq_len
         device = next(self.parameters()).device
-        shape = (bsz, self.seq_len, self.token_embed_dim)
-        predicted_embeddings = torch.zeros(bsz, 0, self.token_embed_dim, device=device)
-
         if labels is None:
             labels = torch.randint(0, self.y_embedder.num_embeddings - 1, (bsz,), device=device)
+        c = self.y_embedder(labels)
 
-        y_emb = self.y_embedder(labels)
-        c = y_emb
+        prefix_embeds = torch.zeros(bsz, 0, self.embed_dim, device=device)
+        for iter in range(num_iter):
+            if iter % 2 == 0:
+                print(f"iter {iter} / {num_iter}")
+            noise_tok = self.corrupt_embeddings(torch.zeros(bsz, 1, self.embed_dim, device=device))
+            pred_seq = torch.cat([prefix_embeds, noise_tok], 1) 
 
-        for step in range(self.seq_len):
-            new_token = self.corrupt_embeddings((bsz, 1, self.token_embed_dim))
-            current_predicted = torch.cat([predicted_embeddings, new_token], dim=1)
+            dummy_zero = torch.zeros_like(noise_tok)
+            real_seq = torch.cat([prefix_embeds, dummy_zero], 1)
 
-            real_embeddings = torch.zeros(bsz, self.seq_len, self.embed_dim, device=device)
+            refined = self.refine_embeddings(real_seq, pred_seq, c)
+            new_token = refined[:, -1:]
+            prefix_embeds = torch.cat([prefix_embeds, new_token], 1)
 
-            # 优化整个序列
-            current_predicted = self.refine_embeddings(real_embeddings, current_predicted, c, mcmc_step=step)
+        pred_tokens = self.output_proj(prefix_embeds)                    # (B,S,token_dim)
+        return self.unpatchify(pred_tokens)
 
-            # 将最后一个优化后的token追加到序列中
-            predicted_embeddings = torch.cat([predicted_embeddings, current_predicted[:, -1:]], dim=1)
-
-        # 还原为图像潜在表示
-        x_0_pred = self.unpatchify(predicted_embeddings)
-        return x_0_pred
 
 if __name__ == "__main__":
-    # 示例用法
     model = DEBT()
-    x = torch.randn(2, 16, 16, 16)  # 模拟VAE潜在表示
+    x = torch.randn(2, 16, 16, 16)
     labels = torch.tensor([0, 1])
-    loss = model(x, labels)
-    print(f"训练损失: {loss.item()}")
-
-    # 采样示例
-    sampled_images = model.sample_tokens(bsz=2, labels=labels)
-    print(f"采样图像形状: {sampled_images.shape}")
+    # print("loss:", model(x, labels).item())
+    model.training = False
+    print("sampled:", model.sample_tokens(2, labels=labels).shape)
