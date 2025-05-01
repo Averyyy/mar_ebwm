@@ -164,6 +164,7 @@ class MetricLogger(object):
                     "time": float(iter_time.value),  
                     "data": float(data_time.value),             # or global_avg
                     "max_mem": float(torch.cuda.max_memory_allocated() / MB),
+                    "mcmc step size": float(self.meters["mcmc_step_size"].value),
                 })
 
             i += 1
@@ -261,6 +262,7 @@ def init_distributed_mode(args):
                 config=vars(args),
                 name=args.run_name,
             )
+            wandb.define_metric("preview", step_metric="epoch", summary="last")
 
 
 class NativeScalerWithGradNormCount:
@@ -308,45 +310,64 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     return total_norm
 
 
-def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
+def add_weight_decay(model, weight_decay=1e-5, skip_list=(), args=None):
     decay = []
     no_decay = []
+    mcmc_step_size = []
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue  # frozen weights
-        if len(param.shape) == 1 or name.endswith(".bias") or name in skip_list or 'diffloss' in name:
+        if 'alpha' in name:
+            mcmc_step_size.append(param)  # MCMC step size parameters (separate group)
+        elif len(param.shape) == 1 or name.endswith(".bias") or name in skip_list or 'diffloss' in name:
             no_decay.append(param)  # no weight decay on bias, norm and diffloss
         else:
             decay.append(param)
     return [
         {'params': no_decay, 'weight_decay': 0.},
-        {'params': decay, 'weight_decay': weight_decay}]
+        {'params': decay, 'weight_decay': weight_decay}, 
+        {'params': mcmc_step_size, 'weight_decay': 0., 'lr': args.mcmc_step_size_lr_multiplier * args.lr},]
+    
 
 
-def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, ema_params=None, epoch_name=None):
+def save_model(args, epoch, model, model_without_ddp, optimizer,
+               loss_scaler, ema_params=None, epoch_name=None):
+
     if epoch_name is None:
         epoch_name = str(epoch)
     output_dir = Path(args.output_dir)
-    checkpoint_path = output_dir / ('checkpoint-%s.pth' % epoch_name)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ema
+    last_ckpt   = output_dir / "checkpoint-last.pth"
+    prev_ckpt   = output_dir / "checkpoint-last-prev.pth"
+    tmp_ckpt    = output_dir / "checkpoint-last.tmp"
+    epoch_ckpt  = output_dir / f"checkpoint-{epoch_name}.pth"
+
+    if is_main_process() and last_ckpt.exists():
+        last_ckpt.replace(prev_ckpt)
+
     if ema_params is not None:
         ema_state_dict = copy.deepcopy(model_without_ddp.state_dict())
         for i, (name, _value) in enumerate(model_without_ddp.named_parameters()):
-            assert name in ema_state_dict
             ema_state_dict[name] = ema_params[i]
     else:
         ema_state_dict = None
 
     to_save = {
-        'model': model_without_ddp.state_dict(),
+        'model'    : model_without_ddp.state_dict(),
         'model_ema': ema_state_dict,
         'optimizer': optimizer.state_dict(),
-        'epoch': epoch,
-        'scaler': loss_scaler.state_dict(),
-        'args': args,
+        'epoch'    : epoch,
+        'scaler'   : loss_scaler.state_dict(),
+        'args'     : args,
     }
-    save_on_master(to_save, checkpoint_path)
+
+    save_on_master(to_save, tmp_ckpt)
+    if is_main_process():
+        os.replace(tmp_ckpt, last_ckpt)
+
+    save_on_master(to_save, epoch_ckpt)
+
 
 
 def all_reduce_mean(x):
