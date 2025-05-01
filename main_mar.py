@@ -21,6 +21,17 @@ from engine_mar import train_one_epoch, evaluate
 import copy
 import wandb
 
+def safe_load_ckpt(resume_dir):
+    last  = Path(resume_dir) / 'checkpoint-last.pth'
+    prev  = Path(resume_dir) / 'checkpoint-last-prev.pth'
+    try:
+        return torch.load(last, map_location='cpu', weights_only=False)
+    except Exception as e:
+        print(f"⚠️  {last.name} damaged {e}")
+        if prev.exists():
+            print("↪️  rollback checkpoint-last-prev.pth")
+            return torch.load(prev, map_location='cpu', weights_only=False)
+        raise
 
 def get_args_parser():
     parser = argparse.ArgumentParser('MAR training with Diffusion Loss', add_help=False)
@@ -306,7 +317,8 @@ def main(args):
 
     # resume training
     if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
-        checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
+        # checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
+        checkpoint = safe_load_ckpt(args.resume)
         model_without_ddp.load_state_dict(checkpoint['model'])
         model_params = list(model_without_ddp.parameters())
         ema_state_dict = checkpoint['model_ema']
