@@ -17,7 +17,7 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.loader import CachedFolder
 
 from models.vae import AutoencoderKL
-from engine_mar import train_one_epoch, evaluate
+from engine_mar import train_one_epoch, evaluate, log_preview
 import copy
 import wandb
 
@@ -64,7 +64,7 @@ def get_args_parser():
     parser.add_argument('--cfg_schedule', default="linear", type=str)
     parser.add_argument('--label_drop_prob', default=0.1, type=float)
     parser.add_argument('--eval_freq', type=int, default=40, help='evaluation frequency')
-    parser.add_argument('--save_last_freq', type=int, default=5, help='save last frequency')
+    parser.add_argument('--save_last_freq', type=int, default=2, help='save last frequency')
     parser.add_argument('--online_eval', action='store_true')
     parser.add_argument('--evaluate', action='store_true')
     parser.add_argument('--eval_bsz', type=int, default=64, help='generation batch size')
@@ -171,6 +171,21 @@ def get_args_parser():
     
     parser.add_argument('--mcmc_step_size_lr_multiplier', default=1, type=float,
                     help='Learning rate multiplier for MCMC step size of energymlp')
+    
+    # preview sampling parameters
+    parser.add_argument('--preview', action='store_true',
+                        help='turn on epoch-wise preview sampling')
+    parser.add_argument('--preview_interval', type=int, default=1,
+                        help='log preview every N epochs (ignored if --preview_epochs given)')
+    parser.add_argument('--preview_epochs', type=str, default='',
+                        help='comma-separated epoch numbers to preview, e.g. "0,5,10"')
+    parser.add_argument('--preview_labels', type=str, default='0,1,2,3,4,5,6',
+                        help='comma-separated ImageNet class ids to preview')
+    parser.add_argument('--preview_seed', type=int, default=42,
+                        help='global torch seed so that the SAME noise is reused each epoch')
+    parser.add_argument('--preview_iter', type=int, default=64,
+                        help='num_iter fed to model.sample_tokens() when previewing')
+
 
     return parser
 
@@ -343,6 +358,22 @@ def main(args):
         evaluate(model_without_ddp, vae, ema_params, args, 0, batch_size=args.eval_bsz, log_writer=log_writer,
                  cfg=args.cfg, use_ema=True)
         return
+    
+    if os.path.exists('util/imagenet_id_to_name.txt'):
+        cls_map = {}
+        try:
+            with open('util/imagenet_id_to_name.txt') as f:
+                for line in f:
+                    k, v = line.strip().split(None, 1)
+                    cls_map[int(k)] = v
+            print(f"☑️ Loaded {len(cls_map)} class id to name mappings")
+        except Exception as e:
+            print(f"❌ Error loading class id to name mapping: {e}")
+            cls_map = {}
+    else:
+        cls_map = {}
+    class_id_to_name = cls_map
+
 
     # training
     print(f"Start training for {args.epochs} epochs")
@@ -365,6 +396,17 @@ def main(args):
             misc.save_model(args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                             loss_scaler=loss_scaler, epoch=epoch, ema_params=ema_params, epoch_name="last")
 
+        # preview sampling
+        if args.preview:
+            epoch_list = [int(x) for x in args.preview_epochs.split(',') if x != '']
+            do_preview = (
+                (epoch in epoch_list) if epoch_list else
+                (epoch % args.preview_interval == 0)
+            )
+            if do_preview:
+                print(f"Preview sampling at epoch {epoch}")
+                log_preview(model_without_ddp, vae, args, epoch, class_id_to_name)
+
         # online evaluation
         if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
             torch.cuda.empty_cache()
@@ -379,7 +421,7 @@ def main(args):
             if log_writer is not None:
                 log_writer.flush()
             print('logging the wandb gradients')
-            wandb.watch(model, log='all', log_freq=100)
+            wandb.watch(model, log='all', log_freq=256)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

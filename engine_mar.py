@@ -195,13 +195,13 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         if torch.isnan(sampled_images).any() or torch.isinf(sampled_images).any():
             print("nan detacted!")
         
-        if misc.is_main_process() and i == 0:
-            images_to_log = []
-            for b_id in range(min(5, sampled_images.size(0))):
-                gen_img = np.round(np.clip(sampled_images[b_id].numpy().transpose([1, 2, 0]) * 255, 0, 255))
-                label = labels_gen[b_id].item()
-                images_to_log.append(wandb.Image(gen_img, caption=f"Class {label}"))
-            wandb.log({"eval_images": images_to_log}, step=epoch)
+        # if misc.is_main_process() and i == 0:
+        #     images_to_log = []
+        #     for b_id in range(min(5, sampled_images.size(0))):
+        #         gen_img = np.round(np.clip(sampled_images[b_id].numpy().transpose([1, 2, 0]) * 255, 0, 255))
+        #         label = labels_gen[b_id].item()
+        #         images_to_log.append(wandb.Image(gen_img, caption=f"Class {label}"))
+        #     wandb.log({"eval_images": images_to_log}, step=epoch)
 
         # distributed save
         for b_id in range(sampled_images.size(0)):
@@ -313,3 +313,41 @@ def cache_latents(vae,
 
     return
 
+
+def log_preview(model, vae, args, epoch, class_id_to_name=None):
+    if not misc.is_main_process() or not args.preview:
+        return
+
+    device = next(model.parameters()).device     # cuda / cpu
+
+    torch.manual_seed(args.preview_seed)
+    np.random.seed(args.preview_seed)
+
+    print("Logging preview images at epoch {} with seed {}".format(epoch, args.preview_seed))
+    label_list = [int(x) for x in args.preview_labels.split(',') if x != '']
+    labels = torch.tensor(label_list, device=device, dtype=torch.long)
+
+    with torch.no_grad():
+        token_latents = model.sample_tokens(
+            bsz=len(labels),
+            num_iter=args.preview_iter,
+            cfg=args.cfg,
+            cfg_schedule=args.cfg_schedule,
+            labels=labels,
+            temperature=args.temperature
+        )
+        imgs = vae.decode(token_latents / 0.2325).clamp(-1, 1)
+
+    out_dir = os.path.join(args.output_dir, 'preview')
+    os.makedirs(out_dir, exist_ok=True)
+
+    log_images = []
+    for i, lbl in enumerate(label_list):
+        # (C,H,W) -> (H,W,C) & [0,255]
+        img_np = ((imgs[i].cpu().numpy().transpose(1, 2, 0) + 1) * 127.5).round().clip(0, 255).astype(np.uint8)
+        cv2.imwrite(os.path.join(out_dir, f"epoch{epoch:04d}_{lbl}.png"), img_np[:, :, ::-1])
+
+        cls_name = class_id_to_name.get(lbl, '') if class_id_to_name else ''
+        caption  = f"class {lbl}: {cls_name}" if cls_name else f"class {lbl}"
+        log_images.append(wandb.Image(img_np, caption=caption))
+    wandb.log({"epoch": epoch, "preview": log_images})

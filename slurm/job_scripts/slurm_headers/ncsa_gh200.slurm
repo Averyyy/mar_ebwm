@@ -10,7 +10,3 @@
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm_outputs/mar-base-energy-continue-%j.out
-
-
-module load cuda/12.6.1
-source activate mar_gh200

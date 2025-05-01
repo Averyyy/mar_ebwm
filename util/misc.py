@@ -262,6 +262,7 @@ def init_distributed_mode(args):
                 config=vars(args),
                 name=args.run_name,
             )
+            wandb.define_metric("preview", step_metric="epoch", summary="last")
 
 
 class NativeScalerWithGradNormCount:

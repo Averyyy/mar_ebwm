@@ -10,7 +10,6 @@ from torch.utils.checkpoint import checkpoint
 
 from timm.models.vision_transformer import Block
 
-from models.diffloss import DiffLoss
 from models.energy_mlp import EnergyMLP
 
 
@@ -34,11 +33,8 @@ class MAR(nn.Module):
                  attn_dropout=0.1,
                  proj_dropout=0.1,
                  buffer_size=64,
-                 diffloss_d=3,
-                 diffloss_w=1024,
-                 num_sampling_steps='100',
-                 diffusion_batch_mul=4,
                  grad_checkpointing=False,
+                 mcmc_step_size=0.01,
                  ):
         super().__init__()
 
@@ -92,22 +88,11 @@ class MAR(nn.Module):
         self.diffusion_pos_embed_learned = nn.Parameter(torch.zeros(1, self.seq_len, decoder_embed_dim))
 
         self.initialize_weights()
-
-        # --------------------------------------------------------------------------
-        # Diffusion Loss
-        # self.diffloss = DiffLoss(
-        #     target_channels=self.token_embed_dim,
-        #     z_channels=decoder_embed_dim,
-        #     width=diffloss_w,
-        #     depth=diffloss_d,
-        #     num_sampling_steps=num_sampling_steps,
-        #     grad_checkpointing=grad_checkpointing
-        # )
-        # self.diffusion_batch_mul = diffusion_batch_mul
         
         self.energy_mlp = EnergyMLP(
             token_embed_dim=vae_embed_dim,
             z_dim=decoder_embed_dim,
+            alpha=mcmc_step_size,
         )
 
     def initialize_weights(self):

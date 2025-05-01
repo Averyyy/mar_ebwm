@@ -1,10 +1,10 @@
-#!/bin/bash
 #SBATCH --job-name=mar-base-1k-64
 #SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm_outputs/mar-base-1k-64-%j.out
 #SBATCH --time=24:00:00
 
 
-
+module load cuda/12.6.1
+source activate mar_gh200
 
 cd /work/hdd/bdta/aqian1/mar_ebwm_coding
 
@@ -16,14 +16,15 @@ torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --m
   --model mar_base  --model_type mar \
   --diffloss_d 3 --diffloss_w 1024 \
   --epochs 100 --warmup_epochs 10 \
-  --batch_size 512 --grad_accu 1 --blr 3.0e-4 \
+  --batch_size 512 --grad_accu 1 --blr 5.0e-5 \
   --diffusion_batch_mul 4 \
   --use_cached --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64 \
   --num_images 1000 \
   --online_eval \
   --eval_freq 50 \
-  --output_dir /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64 \
-  --resume /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64
+  --output_dir /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64-preview \
+  --resume /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64-preview \
+  --preview
 
 # evaluate
 # torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=5748 main_mar.py \
