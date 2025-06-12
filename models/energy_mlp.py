@@ -110,8 +110,6 @@ class EnergyMLP(nn.Module):
                         grad = (1 + cfg) * grad_cond - cfg * grad_uncond
                     else:
                         grad = grad_cond
-                    # noise = torch.randn_like(predicted_embeddings) * temperature
-                    # predicted_embeddings = predicted_embeddings - self.alpha * grad + noise
                     predicted_embeddings = predicted_embeddings - self.alpha * grad
             return predicted_embeddings.detach()
 

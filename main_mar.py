@@ -17,7 +17,7 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.loader import CachedFolder
 
 from models.vae import AutoencoderKL
-from engine_mar import train_one_epoch, evaluate, log_preview
+from engine_mar import train_one_epoch, evaluate, log_preview, validate_one_epoch
 import copy
 import wandb
 
@@ -185,6 +185,15 @@ def get_args_parser():
                         help='global torch seed so that the SAME noise is reused each epoch')
     parser.add_argument('--preview_iter', type=int, default=64,
                         help='num_iter fed to model.sample_tokens() when previewing')
+    
+    parser.add_argument('--val_data_path',
+                        default='/work/nvme/belh/aqian1/imagenet-1k/val/images',
+                        type=str, help='path to ImageNet val/images')
+    parser.add_argument('--val_batch_size', default=64, type=int)
+    parser.add_argument('--val_freq',        default=1,  type=int,
+                        help='validate every N epochs (1 = every epoch)')
+    parser.add_argument('--val', action='store_true',
+                        help='disable validation completely')
 
 
     return parser
@@ -240,6 +249,32 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True,
     )
+    
+    if args.val:
+        transform_val = transforms.Compose([
+            transforms.Lambda(lambda im: center_crop_arr(im, args.img_size)),
+            transforms.Resize((args.effective_img_size, args.effective_img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5,0.5,0.5], [0.5,0.5,0.5])
+        ])
+        dataset_val = datasets.ImageFolder(args.val_data_path, transform=transform_val)
+
+        if args.distributed:
+            sampler_val = torch.utils.data.DistributedSampler(
+                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False
+            )
+        else:
+            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+
+        data_loader_val = torch.utils.data.DataLoader(
+            dataset_val, sampler=sampler_val,
+            batch_size=args.val_batch_size,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_mem,
+            drop_last=False,
+        )
+    else:
+        data_loader_val = None
 
     # define the vae and mar model
     vae = AutoencoderKL(embed_dim=args.vae_embed_dim, ch_mult=(1, 1, 2, 2, 4), ckpt_path=args.vae_path).cuda().eval()
@@ -406,6 +441,18 @@ def main(args):
             if do_preview:
                 print(f"Preview sampling at epoch {epoch}")
                 log_preview(model_without_ddp, vae, args, epoch, class_id_to_name)
+                
+        # validation
+        if (args.val) and (epoch % args.val_freq == 0):
+            val_loss = validate_one_epoch(
+                model_without_ddp, vae, data_loader_val, device
+            )
+            if misc.is_main_process():
+                print(f"[epoch {epoch}]  validation loss: {val_loss:.6f}")
+                if log_writer is not None:
+                    log_writer.add_scalar('val_loss', val_loss, epoch)
+                wandb.log({"val_loss": val_loss}, step=epoch)
+
 
         # online evaluation
         if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):

@@ -351,3 +351,22 @@ def log_preview(model, vae, args, epoch, class_id_to_name=None):
         caption  = f"class {lbl}: {cls_name}" if cls_name else f"class {lbl}"
         log_images.append(wandb.Image(img_np, caption=caption))
     wandb.log({"epoch": epoch, "preview": log_images})
+    
+    
+@torch.no_grad()
+def validate_one_epoch(model, vae, data_loader, device):
+    model.eval()
+    loss_sum, n_samples = 0.0, 0
+    for imgs, labels in data_loader:
+        imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+
+        posterior = vae.encode(imgs)
+        latents   = posterior.sample().mul_(0.2325)
+
+        loss = model(latents, labels)
+        bs   = imgs.size(0)
+        loss_sum += loss.item() * bs
+        n_samples += bs
+
+    avg_loss = misc.all_reduce_mean(loss_sum) / misc.all_reduce_mean(n_samples)
+    return avg_loss
