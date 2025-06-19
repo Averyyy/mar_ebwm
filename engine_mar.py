@@ -79,6 +79,7 @@ def train_one_epoch(model, vae,
         loss_sum += loss_value * accum_steps #for logging
         batch_count += 1
 
+        # disable loss nan check for now
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)

@@ -3,33 +3,61 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
 def modulate(x, shift, scale):
-    """Adaptive Layer Normalization modulation"""
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    return x * (1 + scale) + shift
 
-class AdaLNResBlock(nn.Module):
-    """AdaLN Residual Block"""
-    def __init__(self, channels):
+class ResBlock(nn.Module):
+    """
+    A residual block that can optionally change the number of channels.
+    :param channels: the number of input channels.
+    """
+
+    def __init__(
+        self,
+        channels
+    ):
         super().__init__()
-        self.norm = nn.LayerNorm(channels, elementwise_affine=False, eps=1e-6)
+        self.channels = channels
+
+        self.in_ln = nn.LayerNorm(channels, eps=1e-6)
         self.mlp = nn.Sequential(
             nn.Linear(channels, channels, bias=True),
             nn.SiLU(),
-            nn.Linear(channels, channels, bias=True)
+            nn.Linear(channels, channels, bias=True),
         )
+
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(channels, 3 * channels, bias=True)  # Outputs shift, scale, gate
+            nn.Linear(channels, 3 * channels, bias=True)
+        )
+
+    def forward(self, x, y):
+        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
+        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
+        h = self.mlp(h)
+        return x + gate_mlp * h
+    
+class FinalLayer(nn.Module):
+    """
+    The final layer adopted from DiT.
+    """
+    def __init__(self, model_channels, out_channels):
+        super().__init__()
+        self.norm_final = nn.LayerNorm(model_channels, elementwise_affine=False, eps=1e-6)
+        self.linear = nn.Linear(model_channels, out_channels, bias=True)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(model_channels, 2 * model_channels, bias=True)
         )
 
     def forward(self, x, c):
-        shift, scale, gate = self.adaLN_modulation(c).chunk(3, dim=-1)
-        h = modulate(self.norm(x), shift, scale)
-        h = self.mlp(h)
-        return x + gate.unsqueeze(1) * h
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
+        x = modulate(self.norm_final(x), shift, scale)
+        x = self.linear(x)
+        return x
 
 class EnergyMLP(nn.Module):
     """Energy-based MLP with AdaLN, conditioned on z"""
-    def __init__(self, token_embed_dim, z_dim, hidden_dim=1024, depth=3, mcmc_num_steps=2, 
+    def __init__(self, token_embed_dim, z_dim, hidden_dim=1024, depth=6, mcmc_num_steps=2, 
                  alpha=.01, langevin_noise_std=0, reconstruction_coeff=1.0, grad_checkpointing=False):
         super().__init__()
         self.token_embed_dim = token_embed_dim
@@ -38,7 +66,7 @@ class EnergyMLP(nn.Module):
         self.depth = depth
         self.mcmc_num_steps = mcmc_num_steps
         self.alpha = nn.Parameter(torch.tensor(float(alpha)), requires_grad=True)  # Step size for updates, set to learnable
-        self.langevin_noise_std = nn.Parameter(torch.tensor(float(langevin_noise_std)), requires_grad=False)  # Noise scale
+        # self.langevin_noise_std = nn.Parameter(torch.tensor(float(langevin_noise_std)), requires_grad=False)  # Noise scale
         self.reconstruction_coeff = reconstruction_coeff
         self.grad_checkpointing = grad_checkpointing
 
@@ -47,51 +75,63 @@ class EnergyMLP(nn.Module):
         # Project condition z to hidden space
         self.cond_proj = nn.Linear(z_dim, hidden_dim)
         # AdaLN residual blocks
-        self.res_blocks = nn.ModuleList([AdaLNResBlock(hidden_dim) for _ in range(depth)])
-        # Final layer to output energy scalar
-        self.final_layer = nn.Sequential(
-            nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6),
-            nn.Linear(hidden_dim, 1)
-        )
+        self.res_blocks = nn.ModuleList([ResBlock(hidden_dim) for _ in range(depth)])
+        self.final_layer = FinalLayer(hidden_dim, 1)
 
     def compute_energy(self, predicted_embeddings, z):
-        """Compute energy conditioned on z"""
-        x = self.input_proj(predicted_embeddings)  # [B, S, hidden_dim]  |  [N, hidden_dim]
-        c = self.cond_proj(z)  # [B, S, hidden_dim]  |  [N, hidden_dim]
+        """Compute token-level energy.
+
+        predicted_embeddings: (N, token_dim)
+        z                : (N, decoder_dim)
+        """
+        x = self.input_proj(predicted_embeddings)   # (N, hidden)
+        c = self.cond_proj(z)                      # (N, hidden)
+
         for block in self.res_blocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 x = checkpoint(block, x, c)
             else:
                 x = block(x, c)
-        energy = self.final_layer(x)  # [B, S, 1]  |  [N, 1]
+        energy = self.final_layer(x, c)                # (N,1)
         return energy
 
     def forward(self, z, real_embeddings_input):
-        """Forward pass: Optimize predicted embeddings from noise"""
-        B, S, D = real_embeddings_input.shape
+        """Forward pass with per-token conditioning.
+
+        Inputs
+        z: (B, S, decoder_dim)
+        real_embeddings_input: (B, S, token_dim)
+        """
+        B, S, _ = real_embeddings_input.shape
+
         predicted_embeddings_list = []
         predicted_energies_list = []
         
-        alpha = torch.clamp(self.alpha, min=0.0001)
-        # langevin_noise_std = torch.clamp(self.langevin_noise_std, min=0.000001)
+        z_flat = z.reshape(B * S, -1)  # (B*S, decoder_dim)
 
-        # Initialize predicted embeddings as pure noise
-        predicted_embeddings = torch.randn(B, S, self.token_embed_dim, device=z.device)
+        alpha = torch.clamp(self.alpha, min=1e-4)
+
+        # init noise for predicted embeddings
+        predicted_embeddings = torch.randn(B * S, self.token_embed_dim, device=z.device)
 
         with torch.enable_grad():
             for _ in range(self.mcmc_num_steps):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
-                # Add Langevin dynamics noise
-                # noise = torch.randn_like(predicted_embeddings.detach()) * langevin_noise_std #TODO add this conditionally if its not 0 and set langevin_noise_std to 0 for now
-                # predicted_embeddings = predicted_embeddings + noise
+
                 # Compute energy
-                energy = self.compute_energy(predicted_embeddings, z)
-                predicted_energies_list.append(energy)
-                # Compute gradient of energy
+                energy = self.compute_energy(predicted_embeddings, z_flat)  # (B*S,1)
+
+                # store for logging (reshape back)
+                predicted_energies_list.append(energy.view(B, S, -1))
+
+                # grad
                 grad = torch.autograd.grad(energy.sum(), predicted_embeddings, create_graph=True, retain_graph=True)[0]
-                # Update predicted embeddings
+
+                # update
                 predicted_embeddings = predicted_embeddings - alpha * grad
-                predicted_embeddings_list.append(predicted_embeddings)
+
+                # store prediction (reshape back)
+                predicted_embeddings_list.append(predicted_embeddings.view(B, S, self.token_embed_dim))
 
         return predicted_embeddings_list, predicted_energies_list
 

@@ -365,6 +365,10 @@ def main(args):
     print(optimizer)
     loss_scaler = NativeScaler()
 
+    # log grads/params to wandb once
+    if misc.is_main_process():
+        wandb.watch(model_without_ddp, log="all", log_freq=256)
+
     # resume training
     if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
         # checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
@@ -464,11 +468,8 @@ def main(args):
                          log_writer=log_writer, cfg=args.cfg, use_ema=True)
             torch.cuda.empty_cache()
 
-        if misc.is_main_process():
-            if log_writer is not None:
-                log_writer.flush()
-            print('logging the wandb gradients')
-            wandb.watch(model, log='all', log_freq=256)
+        if misc.is_main_process() and log_writer is not None:
+            log_writer.flush()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

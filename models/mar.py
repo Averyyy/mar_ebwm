@@ -93,6 +93,7 @@ class MAR(nn.Module):
             token_embed_dim=vae_embed_dim,
             z_dim=decoder_embed_dim,
             alpha=mcmc_step_size,
+            mcmc_num_steps=2,
         )
 
     def initialize_weights(self):
@@ -280,7 +281,7 @@ class MAR(nn.Module):
             x = self.forward_mae_encoder(tokens, mask, class_embedding)
 
             # mae decoder
-            z = self.forward_mae_decoder(x, mask)
+            z = self.forward_mae_decoder(x, mask) # (B, S, decoder_dim)
 
             # mask ratio for the next round, following MaskGIT and MAGE.
             mask_ratio = np.cos(math.pi / 2. * (step + 1) / num_iter)
