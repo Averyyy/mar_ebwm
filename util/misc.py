@@ -366,7 +366,7 @@ def save_model(args, epoch, model, model_without_ddp, optimizer,
     }
 
     save_on_master(to_save, tmp_ckpt)
-    if is_main_process():
+    if is_main_process() and tmp_ckpt.exists():
         os.replace(tmp_ckpt, last_ckpt)
 
     save_on_master(to_save, epoch_ckpt)
