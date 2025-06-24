@@ -66,7 +66,7 @@ class EnergyMLP(nn.Module):
         self.depth = depth
         self.mcmc_num_steps = mcmc_num_steps
         self.alpha = nn.Parameter(torch.tensor(float(alpha)), requires_grad=True)  # Step size for updates, set to learnable
-        # self.langevin_noise_std = nn.Parameter(torch.tensor(float(langevin_noise_std)), requires_grad=False)  # Noise scale
+        self.langevin_noise_std = nn.Parameter(torch.tensor(0.0), requires_grad=False)
         self.reconstruction_coeff = reconstruction_coeff
         self.grad_checkpointing = grad_checkpointing
 
@@ -79,20 +79,40 @@ class EnergyMLP(nn.Module):
         self.final_layer = FinalLayer(hidden_dim, 1)
 
     def compute_energy(self, predicted_embeddings, z):
-        """Compute token-level energy.
+        """Compute image-level energy.
 
-        predicted_embeddings: (N, token_dim)
-        z                : (N, decoder_dim)
+        Args:
+            predicted_embeddings (Tensor): shape (B, S, token_dim)
+            z (Tensor):                   shape (B, S, z_dim)
+
+        Returns:
+            Tensor: (B, 1) energy for each image.
         """
-        x = self.input_proj(predicted_embeddings)   # (N, hidden)
-        c = self.cond_proj(z)                      # (N, hidden)
+        B, S, _ = predicted_embeddings.shape
+
+        # project to hidden
+        x = self.input_proj(predicted_embeddings)   # (B, S, hidden)
+        c = self.cond_proj(z)                       # (B, S, hidden)
+
+        # flatten tokens so Residual blocks are applied per-token (parameters shared)
+        x = x.reshape(B * S, self.hidden_dim)
+        c = c.reshape(B * S, self.hidden_dim)
 
         for block in self.res_blocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 x = checkpoint(block, x, c)
             else:
                 x = block(x, c)
-        energy = self.final_layer(x, c)                # (N,1)
+
+        # reshape back and aggregate across tokens to obtain image level representation
+        x = x.view(B, S, self.hidden_dim)
+        c = c.view(B, S, self.hidden_dim)
+
+        # simple mean pool over spatial tokens
+        x_agg = x.mean(dim=1)  # (B, hidden)
+        c_agg = c.mean(dim=1)  # (B, hidden)
+
+        energy = self.final_layer(x_agg, c_agg)  # (B, 1)
         return energy
 
     def forward(self, z, real_embeddings_input):
@@ -106,52 +126,83 @@ class EnergyMLP(nn.Module):
 
         predicted_embeddings_list = []
         predicted_energies_list = []
-        
-        z_flat = z.reshape(B * S, -1)  # (B*S, decoder_dim)
 
         alpha = torch.clamp(self.alpha, min=1e-4)
 
-        # init noise for predicted embeddings
-        predicted_embeddings = torch.randn(B * S, self.token_embed_dim, device=z.device)
+        # init noise for predicted embeddings (per image)
+        predicted_embeddings = torch.randn(B, S, self.token_embed_dim, device=z.device)
 
         with torch.enable_grad():
             for _ in range(self.mcmc_num_steps):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
 
-                # Compute energy
-                energy = self.compute_energy(predicted_embeddings, z_flat)  # (B*S,1)
+                # Compute energy for each image
+                energy = self.compute_energy(predicted_embeddings, z)  # (B,1)
 
-                # store for logging (reshape back)
-                predicted_energies_list.append(energy.view(B, S, -1))
+                # store for logging
+                predicted_energies_list.append(energy)
 
-                # grad
+                # grad w.r.t predicted embeddings
                 grad = torch.autograd.grad(energy.sum(), predicted_embeddings, create_graph=True, retain_graph=True)[0]
 
                 # update
                 predicted_embeddings = predicted_embeddings - alpha * grad
 
-                # store prediction (reshape back)
-                predicted_embeddings_list.append(predicted_embeddings.view(B, S, self.token_embed_dim))
+                # store prediction
+                predicted_embeddings_list.append(predicted_embeddings)
 
         return predicted_embeddings_list, predicted_energies_list
 
-    def sample(self, z_cond, z_uncond=None, cfg=1.0, temperature=1.0):
-            """Sample embeddings with optional CFG"""
-            N, _ = z_cond.shape  # z_cond is [N, z_dim]
-            predicted_embeddings = torch.randn(N, self.token_embed_dim, device=z_cond.device)
+    def sample(self, z_cond, z_uncond=None, cfg=1.0, temperature=1.0, init_embeddings=None, init_embeddings_uncond=None):
+            """Sample full-image embeddings with optional classifier-free guidance.
+
+            Args:
+                z_cond (Tensor): (B, S, z_dim)
+                z_uncond (Tensor|None): same shape as z_cond for unconditional branch.
+                cfg (float): guidance scale.
+                temperature (float): currently only scales initial noise.
+                init_embeddings (Tensor|None): optional starting embeddings for conditional branch (B,S,D).
+                init_embeddings_uncond (Tensor|None): optional starting embeddings for unconditional branch.
+            Returns:
+                Tensor: predicted embeddings for the conditional branch (B,S,D).
+            """
+
+            B, S, _ = z_cond.shape
+
+            # initialise embeddings
+            if init_embeddings is None:
+                pred_cond = torch.randn(B, S, self.token_embed_dim, device=z_cond.device) * temperature
+            else:
+                pred_cond = init_embeddings.clone().to(z_cond.device)
+
+            if z_uncond is not None:
+                if init_embeddings_uncond is None:
+                    pred_uncond = torch.randn_like(pred_cond) * temperature
+                else:
+                    pred_uncond = init_embeddings_uncond.clone().to(z_cond.device)
+
+            alpha = torch.clamp(self.alpha, min=1e-4)
+
             with torch.enable_grad():
                 for _ in range(self.mcmc_num_steps):
-                    predicted_embeddings = predicted_embeddings.detach().requires_grad_()
-                    energy_cond = self.compute_energy(predicted_embeddings, z_cond)
-                    grad_cond = torch.autograd.grad(energy_cond.sum(), predicted_embeddings)[0]
+                    # conditional branch
+                    pred_cond = pred_cond.detach().requires_grad_()
+                    energy_cond = self.compute_energy(pred_cond, z_cond)
+                    grad_cond = torch.autograd.grad(energy_cond.sum(), pred_cond)[0]
+
                     if z_uncond is not None and cfg > 1.0:
-                        energy_uncond = self.compute_energy(predicted_embeddings, z_uncond)
-                        grad_uncond = torch.autograd.grad(energy_uncond.sum(), predicted_embeddings)[0]
+                        # unconditional branch
+                        pred_uncond = pred_uncond.detach().requires_grad_()
+                        energy_uncond = self.compute_energy(pred_uncond, z_uncond)
+                        grad_uncond = torch.autograd.grad(energy_uncond.sum(), pred_uncond)[0]
+
                         grad = (1 + cfg) * grad_cond - cfg * grad_uncond
+                        pred_cond = pred_cond - alpha * grad
+                        pred_uncond = pred_uncond - alpha * grad_uncond  # optional update
                     else:
-                        grad = grad_cond
-                    predicted_embeddings = predicted_embeddings - self.alpha * grad
-            return predicted_embeddings.detach()
+                        pred_cond = pred_cond - alpha * grad_cond
+
+            return pred_cond.detach()
 
     def compute_loss(self, predicted_embeddings_list, real_embeddings_input):
         """Compute reconstruction loss"""

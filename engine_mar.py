@@ -40,6 +40,8 @@ def train_one_epoch(model, vae,
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('mcmc_step_size', misc.SmoothedValue(window_size=1, fmt='{value:.4f}'))
+    metric_logger.update(mcmc_step_size=0.0)
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -104,7 +106,7 @@ def train_one_epoch(model, vae,
         metric_logger.update(lr=lr)
         if args.model_type == "debt":
             metric_logger.update(mcmc_step_size=model.module.alpha.item())
-        else:
+        elif hasattr(model.module, "use_energy_loss") and model.module.use_energy_loss:
             metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
 
         loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)

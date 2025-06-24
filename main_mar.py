@@ -166,6 +166,11 @@ def get_args_parser():
                         choices=['random_noise', 'most_recent_embedding', 'zeros'], 
                         help='[DEBT] Initial condition for denoising')
     
+    # Energy MLP specific parameters
+    parser.add_argument('--use_energy_loss', action='store_true',
+                        help='Use energy-based loss instead of diffusion loss')
+    parser.add_argument('--langevin_noise_std', default=0.01, type=float, help='[EnergyMLP] Langevin dynamics noise standard deviation')
+    
     parser.add_argument('--grad_accu', default=1, type=int,
                     help='Number of gradient accumulation steps')
     
@@ -329,7 +334,16 @@ def main(args):
             proj_dropout=args.proj_dropout,
             buffer_size=args.buffer_size,
             grad_checkpointing=args.grad_checkpointing,
+            # Loss type selection
+            use_energy_loss=args.use_energy_loss,
+            # DiffLoss parameters
+            diffloss_d=args.diffloss_d,
+            diffloss_w=args.diffloss_w,
+            num_sampling_steps=args.num_sampling_steps,
+            diffusion_batch_mul=args.diffusion_batch_mul,
+            # Energy loss parameters
             mcmc_step_size=args.mcmc_step_size,
+            langevin_noise_std=args.langevin_noise_std,
         )
 
     print("Model = %s" % str(model))

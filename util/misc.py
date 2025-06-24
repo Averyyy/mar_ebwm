@@ -157,7 +157,7 @@ class MetricLogger(object):
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
             if is_main_process() and "loss" in self.meters:
-                wandb.log({
+                log_dict = {
                     "eta": float(eta_seconds),                    
                     "loss": float(self.meters["loss"].value),   
                     "lr": float(self.meters["lr"].value),       
@@ -165,7 +165,10 @@ class MetricLogger(object):
                     "data": float(data_time.value),             # or global_avg
                     "max_mem": float(torch.cuda.max_memory_allocated() / MB),
                     "mcmc step size": float(self.meters["mcmc_step_size"].value),
-                })
+                }
+                if "langevin_noise_std" in self.meters:
+                    log_dict["langevin_noise_std"] = float(self.meters["langevin_noise_std"].value)
+                wandb.log(log_dict)
 
             i += 1
             end = time.time()
