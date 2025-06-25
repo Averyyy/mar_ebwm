@@ -4,3 +4,7 @@ __pycache__/
 output/
 wandb/
 logs/
+
+# slurm/*
+# slurm/job_configs/
+# *.slurm

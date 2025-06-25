@@ -11,6 +11,7 @@ from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Block
 
 from models.diffloss import DiffLoss
+from models.energy_mlp import EnergyMLP
 
 
 def mask_by_order(mask_len, order, bsz, seq_len):
@@ -38,6 +39,10 @@ class MAR(nn.Module):
                  num_sampling_steps='100',
                  diffusion_batch_mul=4,
                  grad_checkpointing=False,
+                 # Energy loss parameters
+                 use_energy_loss=False,
+                 mcmc_step_size=0.01,
+                 langevin_noise_std=0.01,
                  ):
         super().__init__()
 
@@ -52,6 +57,7 @@ class MAR(nn.Module):
         self.seq_len = self.seq_h * self.seq_w
         self.token_embed_dim = vae_embed_dim * patch_size**2
         self.grad_checkpointing = grad_checkpointing
+        self.use_energy_loss = use_energy_loss
 
         # --------------------------------------------------------------------------
         # Class Embedding
@@ -93,16 +99,28 @@ class MAR(nn.Module):
         self.initialize_weights()
 
         # --------------------------------------------------------------------------
-        # Diffusion Loss
-        self.diffloss = DiffLoss(
-            target_channels=self.token_embed_dim,
-            z_channels=decoder_embed_dim,
-            width=diffloss_w,
-            depth=diffloss_d,
-            num_sampling_steps=num_sampling_steps,
-            grad_checkpointing=grad_checkpointing
-        )
-        self.diffusion_batch_mul = diffusion_batch_mul
+        # Loss module selection
+        if use_energy_loss:
+            # Energy-based loss
+            self.energy_mlp = EnergyMLP(
+                token_embed_dim=vae_embed_dim,
+                z_dim=decoder_embed_dim,
+                alpha=mcmc_step_size,
+                mcmc_num_steps=2,
+                langevin_noise_std=langevin_noise_std,
+                grad_checkpointing=grad_checkpointing,
+            )
+        else:
+            # Diffusion Loss
+            self.diffloss = DiffLoss(
+                target_channels=self.token_embed_dim,
+                z_channels=decoder_embed_dim,
+                width=diffloss_w,
+                depth=diffloss_d,
+                num_sampling_steps=num_sampling_steps,
+                grad_checkpointing=grad_checkpointing
+            )
+            self.diffusion_batch_mul = diffusion_batch_mul
 
     def initialize_weights(self):
         # parameters
@@ -254,8 +272,12 @@ class MAR(nn.Module):
         # mae decoder
         z = self.forward_mae_decoder(x, mask)
 
-        # diffloss
-        loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
+        # loss computation
+        if self.use_energy_loss:
+            predicted_embeddings_list, _ = self.energy_mlp(z, gt_latents)
+            loss = self.energy_mlp.compute_loss(predicted_embeddings_list, gt_latents)
+        else:
+            loss = self.forward_loss(z=z, target=gt_latents, mask=mask)
 
         return loss
 
@@ -308,20 +330,60 @@ class MAR(nn.Module):
                 mask_to_pred = torch.cat([mask_to_pred, mask_to_pred], dim=0)
 
             # sample token latents for this step
-            z = z[mask_to_pred.nonzero(as_tuple=True)]
-            # cfg schedule follow Muse
-            if cfg_schedule == "linear":
-                cfg_iter = 1 + (cfg - 1) * (self.seq_len - mask_len[0]) / self.seq_len
-            elif cfg_schedule == "constant":
-                cfg_iter = cfg
-            else:
-                raise NotImplementedError
-            sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
-            if not cfg == 1.0:
-                sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
-                mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)
+            if self.use_energy_loss:
+                # Energy-based sampling
+                if cfg != 1.0:
+                    # split conditional / unconditional branches
+                    z_cond = z[:bsz]
+                    z_uncond = z[bsz:]
+                    tokens_cond = tokens[:bsz]
+                    tokens_uncond = tokens[bsz:]
 
-            cur_tokens[mask_to_pred.nonzero(as_tuple=True)] = sampled_token_latent
+                    if cfg_schedule == "linear":
+                        cfg_iter = 1 + (cfg - 1) * (self.seq_len - mask_len[0]) / self.seq_len
+                    elif cfg_schedule == "constant":
+                        cfg_iter = cfg
+                    else:
+                        raise NotImplementedError
+
+                    # sample embeddings for conditional branch
+                    sampled_tokens_cond = self.energy_mlp.sample(
+                        z_cond,
+                        z_uncond=z_uncond,
+                        cfg=cfg_iter,
+                        temperature=temperature,
+                        init_embeddings=tokens_cond,
+                        init_embeddings_uncond=tokens_uncond,
+                    )
+
+                    # update only the positions we intend to predict
+                    mask_to_pred_cond = mask_to_pred[:bsz]
+                    cur_tokens[:bsz][mask_to_pred_cond.nonzero(as_tuple=True)] = sampled_tokens_cond[mask_to_pred_cond.nonzero(as_tuple=True)]
+
+                else:
+                    sampled_tokens = self.energy_mlp.sample(
+                        z,
+                        temperature=temperature,
+                        init_embeddings=tokens,
+                    )
+                    cur_tokens[mask_to_pred.nonzero(as_tuple=True)] = sampled_tokens[mask_to_pred.nonzero(as_tuple=True)]
+            else:
+                # Diffusion-based sampling
+                z = z[mask_to_pred.nonzero(as_tuple=True)]
+                # cfg schedule follow Muse
+                if cfg_schedule == "linear":
+                    cfg_iter = 1 + (cfg - 1) * (self.seq_len - mask_len[0]) / self.seq_len
+                elif cfg_schedule == "constant":
+                    cfg_iter = cfg
+                else:
+                    raise NotImplementedError
+                sampled_token_latent = self.diffloss.sample(z, temperature, cfg_iter)
+                if not cfg == 1.0:
+                    sampled_token_latent, _ = sampled_token_latent.chunk(2, dim=0)  # Remove null class samples
+                    mask_to_pred, _ = mask_to_pred.chunk(2, dim=0)
+
+                cur_tokens[mask_to_pred.nonzero(as_tuple=True)] = sampled_token_latent
+
             tokens = cur_tokens.clone()
 
         # unpatchify

@@ -40,6 +40,8 @@ def train_one_epoch(model, vae,
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('mcmc_step_size', misc.SmoothedValue(window_size=1, fmt='{value:.4f}'))
+    metric_logger.update(mcmc_step_size=0.0)
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -79,6 +81,7 @@ def train_one_epoch(model, vae,
         loss_sum += loss_value * accum_steps #for logging
         batch_count += 1
 
+        # disable loss nan check for now
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
@@ -103,7 +106,7 @@ def train_one_epoch(model, vae,
         metric_logger.update(lr=lr)
         if args.model_type == "debt":
             metric_logger.update(mcmc_step_size=model.module.alpha.item())
-        else:
+        elif hasattr(model.module, "use_energy_loss") and model.module.use_energy_loss:
             metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
 
         loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
@@ -351,3 +354,22 @@ def log_preview(model, vae, args, epoch, class_id_to_name=None):
         caption  = f"class {lbl}: {cls_name}" if cls_name else f"class {lbl}"
         log_images.append(wandb.Image(img_np, caption=caption))
     wandb.log({"epoch": epoch, "preview": log_images})
+    
+    
+@torch.no_grad()
+def validate_one_epoch(model, vae, data_loader, device):
+    model.eval()
+    loss_sum, n_samples = 0.0, 0
+    for imgs, labels in data_loader:
+        imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+
+        posterior = vae.encode(imgs)
+        latents   = posterior.sample().mul_(0.2325)
+
+        loss = model(latents, labels)
+        bs   = imgs.size(0)
+        loss_sum += loss.item() * bs
+        n_samples += bs
+
+    avg_loss = misc.all_reduce_mean(loss_sum) / misc.all_reduce_mean(n_samples)
+    return avg_loss

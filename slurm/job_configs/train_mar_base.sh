@@ -16,12 +16,9 @@ torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --m
   --model mar_base  --model_type mar \
   --diffloss_d 3 --diffloss_w 1024 \
   --epochs 100 --warmup_epochs 10 \
-  --batch_size 512 --grad_accu 1 --blr 5.0e-5 \
+  --batch_size 512 --grad_accu 1 --blr 1.0e-4 \
   --diffusion_batch_mul 4 \
   --use_cached --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64 \
-  --num_images 1000 \
-  --online_eval \
-  --eval_freq 50 \
   --output_dir /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64-preview \
   --resume /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-1k-64-preview \
   --preview
@@ -46,3 +43,18 @@ torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --m
 #   --evaluate
 
   
+# torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=5748 main_mar.py \
+#   --run_name mar-base-1k-64-test \
+#   --img_size 64 \
+#   --vae_path /work/hdd/bdta/aqian1/mar_ebwm/pretrained_models/vae/kl16.ckpt \
+#   --vae_embed_dim 16 --vae_stride 16 --patch_size 1 \
+#   --model mar_base  --model_type mar \
+#   --diffloss_d 3 --diffloss_w 1024 \
+#   --epochs 100 --warmup_epochs 10 \
+#   --batch_size 512 --grad_accu 1 --blr 1.0e-5 \
+#   --diffusion_batch_mul 4 \
+#   --use_cached --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-tiny \
+#   --output_dir /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-64-test \
+#   --resume /work/hdd/bdta/aqian1/mar_ebwm_coding/output/mar-base-64-test \
+#   --preview \
+#   --val

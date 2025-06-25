@@ -501,7 +501,7 @@ class GaussianDiffusion:
             indices = tqdm(indices)
 
         for i in indices:
-            t = th.tensor([i] * shape[0]).cuda()
+            t = th.tensor([i] * shape[0], dtype=th.long).cuda()
             with th.no_grad():
                 out = self.p_sample(
                     model,
@@ -668,7 +668,7 @@ class GaussianDiffusion:
             indices = tqdm(indices)
 
         for i in indices:
-            t = th.tensor([i] * shape[0]).cuda()
+            t = th.tensor([i] * shape[0], dtype=th.long).cuda()
             with th.no_grad():
                 out = self.ddim_sample(
                     model,
@@ -799,7 +799,7 @@ class GaussianDiffusion:
         :return: a batch of [N] KL values (in bits), one per batch element.
         """
         batch_size = x_start.shape[0]
-        t = th.tensor([self.num_timesteps - 1] * batch_size, device=x_start.device)
+        t = th.tensor([self.num_timesteps - 1] * batch_size, dtype=th.long, device=x_start.device)
         qt_mean, _, qt_log_variance = self.q_mean_variance(x_start, t)
         kl_prior = normal_kl(
             mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0
@@ -829,7 +829,7 @@ class GaussianDiffusion:
         xstart_mse = []
         mse = []
         for t in list(range(self.num_timesteps))[::-1]:
-            t_batch = th.tensor([t] * batch_size, device=device)
+            t_batch = th.tensor([t] * batch_size, dtype=th.long, device=device)
             noise = th.randn_like(x_start)
             x_t = self.q_sample(x_start=x_start, t=t_batch, noise=noise)
             # Calculate VLB term at the current timestep
