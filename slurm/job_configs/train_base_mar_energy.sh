@@ -151,22 +151,23 @@ torchrun \
 #     --seed 42
 
 
-# torchrun \
-#     --nproc_per_node=4 \
-#     main_mar.py \
-#     --run_name mar-base-test \
-#     --img_size 64 \
-#     --vae_path pretrained_models/vae/kl16.ckpt \
-#     --model mar_base \
-#     --model_type mar \
-#     --epochs 100 \
-#     --warmup_epochs 10 \
-#     --batch_size 512 \
-#     --grad_accu 1 \
-#     --grad_clip 1.0 \
-#     --blr 1e-4 \
-#     --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/mar-base-energy-test \
-#     --use_cached \
-#     --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64 \
-#     --preview \
-#     --seed 42
+
+torchrun \
+    --nproc_per_node=4 \
+    main_mar.py \
+    --run_name mar-base-test \
+    --img_size 64 \
+    --vae_path pretrained_models/vae/kl16.ckpt \
+    --model mar_base \
+    --model_type mar \
+    --epochs 100 \
+    --warmup_epochs 10 \
+    --batch_size 512 \
+    --grad_accu 1 \
+    --grad_clip 1.0 \
+    --blr 1e-4 \
+    --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/mar-base-energy-test \
+    --use_cached \
+    --cached_path /work/hdd/bdta/aqian1/data/cached-tiny \
+    --preview \
+    --seed 42
