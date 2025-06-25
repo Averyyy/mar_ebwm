@@ -420,3 +420,44 @@ if __name__ == "__main__":
         print("✗ Inference failed:", str(e))
         import traceback
         traceback.print_exc()
+
+
+def debt_2xs(**kwargs):
+    """DEBT 2xs: 6 layers (3+3), 384 dim, 6 heads"""
+    return DEBT(
+        embed_dim=384,
+        depth=6,  # 3 + 3
+        num_heads=6,
+        mlp_ratio=4.0,
+        **kwargs,
+    )
+
+def debt_base(**kwargs):
+    """DEBT base: 24 layers (12+12), 768 dim, 12 heads"""
+    return DEBT(
+        embed_dim=768,
+        depth=24,  # 12 + 12
+        num_heads=12,
+        mlp_ratio=4.0,
+        **kwargs,
+    )
+
+def debt_large(**kwargs):
+    """DEBT large: 32 layers (16+16), 1024 dim, 16 heads"""
+    return DEBT(
+        embed_dim=1024,
+        depth=32,  # 16 + 16
+        num_heads=16,
+        mlp_ratio=4.0,
+        **kwargs,
+    )
+
+def debt_huge(**kwargs):
+    """DEBT huge: 40 layers (20+20), 1280 dim, 16 heads"""
+    return DEBT(
+        embed_dim=1280,
+        depth=40,  # 20 + 20
+        num_heads=16,
+        mlp_ratio=4.0,
+        **kwargs,
+    )

@@ -5,6 +5,5 @@ output/
 wandb/
 logs/
 
-# slurm/*
-# slurm/job_configs/
-# *.slurm
+slurm/
+slurm/job_configs/

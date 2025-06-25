@@ -304,22 +304,38 @@ def main(args):
             diffusion_batch_mul=args.diffusion_batch_mul,
         )
     elif args.model_type == "debt":
-        from models.debt import DEBT
-        model = DEBT(
-            img_size=args.img_size,
-            vae_stride=args.vae_stride,
-            patch_size=args.patch_size,
-            embed_dim=args.embed_dim,
-            depth=args.depth,
-            num_heads=args.num_heads,
-            mlp_ratio=args.mlp_ratio,
-            class_num=args.class_num,
-            dropout_prob=args.attn_dropout,
-            mcmc_num_steps=args.mcmc_num_steps,
-            mcmc_step_size=args.mcmc_step_size,
-            langevin_dynamics_noise=args.langevin_dynamics_noise,
-            denoising_initial_condition=args.denoising_initial_condition,
-        )
+        from models import debt
+        # Check if args.model specifies a DEBT variant (debt_base, debt_large, etc.)
+        if hasattr(debt, args.model):
+            model = debt.__dict__[args.model](
+                img_size=args.img_size,
+                vae_stride=args.vae_stride,
+                patch_size=args.patch_size,
+                class_num=args.class_num,
+                dropout_prob=args.attn_dropout,
+                mcmc_num_steps=args.mcmc_num_steps,
+                mcmc_step_size=args.mcmc_step_size,
+                langevin_dynamics_noise=args.langevin_dynamics_noise,
+                denoising_initial_condition=args.denoising_initial_condition,
+            )
+        else:
+            # Fallback to manual specification
+            from models.debt import DEBT
+            model = DEBT(
+                img_size=args.img_size,
+                vae_stride=args.vae_stride,
+                patch_size=args.patch_size,
+                embed_dim=args.embed_dim,
+                depth=args.depth,
+                num_heads=args.num_heads,
+                mlp_ratio=args.mlp_ratio,
+                class_num=args.class_num,
+                dropout_prob=args.attn_dropout,
+                mcmc_num_steps=args.mcmc_num_steps,
+                mcmc_step_size=args.mcmc_step_size,
+                langevin_dynamics_noise=args.langevin_dynamics_noise,
+                denoising_initial_condition=args.denoising_initial_condition,
+            )
     else:
         from models import mar
         model = mar.__dict__[args.model](

@@ -1,5 +1,5 @@
 #SBATCH --job-name=debt-base-grid
-#SBATCH --array=0-0
+#SBATCH --array=0-5
 #SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm_outputs/%A/debt-grid-%a.out
 #SBATCH --time=24:00:00
 
@@ -7,7 +7,7 @@
 # --- Grid Search Parameters ---
 Define the grid of hyperparameters to search over for DEBT
 lrs=(1e-4 1e-5)
-alphas=(0.5 1 5 10)
+alphas=(0.1 1 10)
 
 # --- Calculate parameters for this job ---
 num_lrs=${#lrs[@]}
@@ -57,8 +57,8 @@ torchrun \
     --mcmc_step_size_lr_multiplier ${multiplier} \
     --epochs 200 \
     --warmup_epochs 20 \
-    --batch_size 512 \
-    --grad_accu 1 \
+    --batch_size 256 \
+    --grad_accu 2 \
     --blr ${lr} \
     --output_dir ${OUTPUT_DIR} \
     --use_cached \
