@@ -19,5 +19,5 @@ torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=localhost --m
  --batch_size 64 --blr 8.0e-4 \
  --diffusion_batch_mul 4 \
  --output_dir ./output/mar-large-1k \
- --use_cached --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet-1k
+ --use_cached --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet-1k
 # --resume ./output/mar-large-1k \

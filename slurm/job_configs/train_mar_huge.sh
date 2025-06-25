@@ -21,4 +21,4 @@ torchrun --nproc_per_node=2 --nnodes=1 --node_rank=0 --master_addr=localhost --m
   --diffusion_batch_mul 4 \
   --output_dir ./output/mar-huge-1k-bz2048 \
   --resume ./output/mar-huge-1k-bz2048 \
-  --use_cached --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet-1k
+  --use_cached --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet-1k

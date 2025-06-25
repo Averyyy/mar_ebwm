@@ -61,7 +61,7 @@ torchrun \
     --blr ${lr} \
     --output_dir ${OUTPUT_DIR} \
     --use_cached \
-    --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64 \
+    --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64 \
     --use_energy_loss \
     --mcmc_step_size_lr_multiplier ${multiplier} \
     --mcmc_step_size ${alpha} \
@@ -118,7 +118,7 @@ torchrun \
 #     --blr 1e-5 \
 #     --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/mar-base-energy-tiny-alpha-0.01-mult-50-test \
 #     --use_cached \
-#     --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-tiny \
+#     --cached_path /work/hdd/bdta/aqian1/data/cached-tiny \
 #     --seed 42 \
 #     --mcmc_step_size_lr_multiplier 1 \
 #     --mcmc_step_size 0.01 \
@@ -143,7 +143,7 @@ torchrun \
 #     --blr 1e-6 \
 #     --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/mar-base-energy-test \
 #     --use_cached \
-#     --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64 \
+#     --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64 \
 #     --use_energy_loss \
 #     --mcmc_step_size_lr_multiplier 1 \
 #     --mcmc_step_size 5 \
@@ -168,6 +168,6 @@ torchrun \
     --blr 1e-4 \
     --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/mar-base-energy-test \
     --use_cached \
-    --cached_path /work/hdd/bdta/aqian1/data/cached-tiny \
+    --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64 \
     --preview \
     --seed 42

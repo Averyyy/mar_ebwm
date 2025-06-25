@@ -32,7 +32,7 @@ torchrun \
   --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/debt-base-1k-64 \
   --resume     /work/hdd/bdta/aqian1/mar_ebwm/output/debt-base-1k-64 \
   --use_cached \
-  --cached_path /work/hdd/bdta/aqian1/mar_ebwm/data/cached-imagenet1k-64 \
+  --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64 \
   --seed 42
 
 
