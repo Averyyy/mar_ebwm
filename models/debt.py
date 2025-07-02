@@ -13,8 +13,6 @@ class DEBT(nn.Module):
     Training: 
     real_embedding: [<start> <gt_token_0> <gt_token_1> <gt_token_2>]
     pred_embedding: [<pred_token_0> <pred_token_1> <pred_token_2> <end>]
-    
-    Uses causal mask where pred tokens only attend to previous ground truth tokens.
     """
 
     def __init__(
@@ -54,8 +52,8 @@ class DEBT(nn.Module):
         self.finished_warming_up = False
 
         self.y_embedder = nn.Embedding(class_num + 1, embed_dim)
-        # Position embedding for 2*seq_len (real + pred sequences of length seq_len each)
-        self.pos_embed = nn.Parameter(torch.zeros(1, 2 * self.seq_len, embed_dim))
+        # Position embedding for 2*(seq_len+1) ‑- extra slot for <start>/<end>
+        self.pos_embed = nn.Parameter(torch.zeros(1, 2 * (self.seq_len + 1), embed_dim))
         self.start_token = nn.Parameter(torch.randn(1, embed_dim))
         self.end_token = nn.Parameter(torch.randn(1, embed_dim))
         self.double_condition = double_condition
@@ -70,7 +68,7 @@ class DEBT(nn.Module):
             n_heads=num_heads,
             ffn_dim_multiplier=mlp_ratio,
             adaln_zero_init=False,
-            max_seq_len=2 * self.seq_len,  # real + pred sequences
+            max_seq_len=2 * (self.seq_len + 1),  # real + pred sequences (+1 for <start>/<end>)
             weight_initialization="xavier",
             weight_initialization_gain=1.0,
             final_output_dim=1,  # for energy output
@@ -120,12 +118,12 @@ class DEBT(nn.Module):
         else:
             raise ValueError(f"Unknown denoising_initial_condition: {self.denoising_initial_condition}")
 
-    def refine_embeddings_training(self, real_embeddings, time_embeddings):
+    def refine_embeddings_training(self, real_embeddings, cond_embeddings):
         """
         Refine embeddings during training using MCMC.
         
         real_embeddings: (B, S, D) - ground truth tokens
-        time_embeddings: (B, D) - class/time conditioning
+        cond_embeddings: (B, D) - conditioning embeddings (e.g., class label)
         
         Returns: refined predicted embeddings (B, S, D)
         """
@@ -137,40 +135,34 @@ class DEBT(nn.Module):
         alpha = torch.clamp(self.alpha, min=1e-4)
         langevin_std = torch.clamp(torch.tensor(self.langevin_dynamics_noise), min=1e-6)
         
-        # Construct sequences according to DEBT specification for EBTAdaLN compatibility:
-        # For sequence length S, we create:
-        # real_seq: [<start> <gt_token_0> <gt_token_1> ... <gt_token_{S-2}>]  # length S-1+1 = S
-        # pred_seq: [<pred_token_0> <pred_token_1> ... <pred_token_{S-1}>]     # length S
-        # Total length: 2*S (matches EBTAdaLN expectation of 2*(S-1) when S maps to S-1)
-        
         start_tokens = self.start_token.expand(B, 1, -1)  # (B, 1, D)
         
         with torch.set_grad_enabled(True):
             for mcmc_step in range(self.mcmc_num_steps):
                 predicted_embeddings = predicted_embeddings.detach().requires_grad_()
                 
-                # Add Langevin dynamics noise after warming up
                 if self.finished_warming_up and self.langevin_dynamics_noise > 0:
                     ld_noise = torch.randn_like(predicted_embeddings) * langevin_std
                     predicted_embeddings = predicted_embeddings + ld_noise
                 
-                # real_seq: [<start> + first S-1 ground truth tokens]
-                real_seq = torch.cat([start_tokens, real_embeddings[:, :-1]], dim=1)  # (B, S, D)
-                # pred_seq: [all S predicted tokens] (corresponds to all S ground truth tokens)
-                pred_seq = predicted_embeddings  # (B, S, D)
+                # real_seq: [<start>] + all S ground-truth tokens  → length S+1
+                real_seq = torch.cat([start_tokens, real_embeddings], dim=1)  # (B, S+1, D)
                 
-                # Concatenate real and predicted sequences for EBT: total length 2*S
-                all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*S, D)
+                # pred_seq: [predicted_tokens] + <end>  → length S+1
+                end_tok_exp = self.end_token.expand(B, 1, -1)
+                pred_seq = torch.cat([predicted_embeddings, end_tok_exp], dim=1)  # (B, S+1, D)
                 
-                # Add positional embeddings
+                # Concatenate real and predicted sequences for EBT: total length 2*(S+1)
+                all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*(S+1), D)
+                
                 pos_embed_slice = self.pos_embed[:, :all_embeddings.size(1), :]
                 all_embeddings = all_embeddings + pos_embed_slice
                 
-                # Get energy predictions from transformer
-                energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=time_embeddings)
+                # EBT forward pass
+                energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=cond_embeddings)
                 energy_preds = energy_preds.reshape(-1, 1)
                 
-                # Compute gradients for MCMC update
+                # MCMC update
                 if self.training:
                     predicted_embeds_grad = torch.autograd.grad(
                         [energy_preds.sum()], [predicted_embeddings], 
@@ -181,18 +173,17 @@ class DEBT(nn.Module):
                         [energy_preds.sum()], [predicted_embeddings]
                     )[0]
                 
-                # Update predicted embeddings
                 predicted_embeddings = predicted_embeddings - alpha * predicted_embeds_grad
         
         return predicted_embeddings
 
-    def refine_embeddings_inference(self, real_prefix, predicted_token, time_embeddings, mcmc_steps=None):
+    def refine_embeddings_inference(self, real_prefix, predicted_token, cond_embeddings, mcmc_steps=None):
         """
         Refine a single predicted token during inference.
         
         real_prefix: (B, prefix_len, D) - previously generated tokens with start token
         predicted_token: (B, 1, D) - current token to refine
-        time_embeddings: (B, D) - class conditioning
+        cond_embeddings: (B, D) - conditioning embeddings (e.g., class label)
         
         Returns: refined predicted token (B, 1, D)
         """
@@ -206,41 +197,37 @@ class DEBT(nn.Module):
             for mcmc_step in range(mcmc_steps):
                 predicted_token = predicted_token.detach().requires_grad_()
                 
-                # For inference, construct minimal sequence that matches EBT expectations
-                # real_seq should contain start + generated tokens so far (up to current position)
-                # pred_seq should contain current token being refined + padding
+                # real_seq contain start + generated tokens so far (up to current position)
+                # pred_seq contain current token being refined + padding
                 
-                current_pos = real_prefix.size(1) - 1  # subtract 1 for start token to get generation position
+                current_pos = real_prefix.size(1) - 1  # start token is at position 0
                 
+                # if we've generated all tokens, just refine the last one
                 if current_pos >= self.seq_len:
-                    # If we've generated all tokens, just refine the last one
                     current_pos = self.seq_len - 1
                 
-                # Create fixed-length sequences for EBT
-                # Real sequence: start + generated tokens + padding
-                real_seq = torch.zeros(B, self.seq_len, self.embed_dim, device=predicted_token.device)
-                real_seq[:, 0] = self.start_token.squeeze(0)  # start token
-                
-                # Fill in generated tokens up to current position
+                extended_len = self.seq_len + 1
+
+                # real sequence: <start> + generated tokens + <end> padding
+                real_seq = torch.zeros(B, extended_len, self.embed_dim, device=predicted_token.device)
+                real_seq[:, 0] = self.start_token.squeeze(0)  # <start>
+
+                # fill in the already generated tokens
                 if current_pos > 0 and real_prefix.size(1) > 1:
                     copy_len = min(current_pos, real_prefix.size(1) - 1)
-                    real_seq[:, 1:1+copy_len] = real_prefix[:, 1:1+copy_len]
-                
-                # Fill remaining positions with end tokens
-                if current_pos + 1 < self.seq_len:
-                    real_seq[:, current_pos+1:] = self.end_token.expand(B, self.seq_len - current_pos - 1, -1)
-                
-                # Predicted sequence: current token at appropriate position + zeros elsewhere
-                pred_seq = torch.zeros(B, self.seq_len, self.embed_dim, device=predicted_token.device)
-                pred_seq[:, current_pos:current_pos+1] = predicted_token
-                
-                # Debug information for first MCMC step
-                # if mcmc_step == 0:
-                #     print(f"Inference refinement - current_pos: {current_pos}, real_prefix_len: {real_prefix.size(1)}")
-                #     print(f"Real seq shape: {real_seq.shape}, Pred seq shape: {pred_seq.shape}")
+                    real_seq[:, 1:1 + copy_len] = real_prefix[:, 1:1 + copy_len]
+
+                # fill remaining slots with <end>
+                if current_pos + 1 < extended_len:
+                    real_seq[:, current_pos + 1:] = self.end_token.expand(B, extended_len - current_pos - 1, -1)
+
+                # Predicted sequence: place current predicted token, append fixed <end>
+                pred_seq = torch.zeros(B, extended_len, self.embed_dim, device=predicted_token.device)
+                pred_seq[:, current_pos:current_pos + 1] = predicted_token  # current token being refined
+                pred_seq[:, -1] = self.end_token.squeeze(0)
                 
                 # Concatenate for EBT
-                all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*seq_len, D)
+                all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*(seq_len+1), D)
                 
                 # Add positional embeddings
                 pos_embed_slice = self.pos_embed[:, :all_embeddings.size(1), :]
@@ -251,18 +238,14 @@ class DEBT(nn.Module):
                 #     print(f"Pos embed slice shape: {pos_embed_slice.shape}")
                 
                 # Get energy prediction
-                energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=time_embeddings)
+                energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=cond_embeddings)
                 
                 # if mcmc_step == 0:
                 #     print(f"Energy preds shape: {energy_preds.shape}")
                 
                 # Extract energy for current predicted token
-                if energy_preds.dim() == 3:
-                    energy_sum = energy_preds[:, current_pos, 0].sum()
-                else:
-                    energy_sum = energy_preds.flatten()[current_pos]
+                energy_sum = energy_preds[:, current_pos, 0].sum()
                 
-                # Compute gradients and update
                 grad = torch.autograd.grad(energy_sum, predicted_token)[0]
                 predicted_token = predicted_token - alpha * grad
         
@@ -275,10 +258,10 @@ class DEBT(nn.Module):
         real_embeddings = self.input_proj(gt_tokens)  # (B, S, embed_dim)
         
         # Get class conditioning
-        time_embeddings = self.y_embedder(labels)  # (B, embed_dim)
+        cond_embeddings = self.y_embedder(labels)  # (B, embed_dim)
         
         # Refine embeddings using MCMC
-        refined_embeddings = self.refine_embeddings_training(real_embeddings, time_embeddings)
+        refined_embeddings = self.refine_embeddings_training(real_embeddings, cond_embeddings)
         
         # Project back to token space and reconstruct image
         pred_tokens = self.output_proj(refined_embeddings)  # (B, S, token_embed_dim)
@@ -296,35 +279,22 @@ class DEBT(nn.Module):
         Step 2: real: [<start> <pred_token_0>], pred: [<pred_token_1>]
         ...
         
-        Args:
-            bsz: batch size
-            num_iter: number of iterations/tokens to generate (will be clamped to seq_len)
-            cfg: classifier-free guidance scale (not used in DEBT but kept for compatibility)
-            cfg_schedule: CFG schedule (not used in DEBT but kept for compatibility) 
-            labels: class labels
-            temperature: sampling temperature (not used in DEBT but kept for compatibility)
-            progress: whether to show progress
         """
         print("DEBT sampling started")
         
-        # For DEBT, we always generate exactly seq_len tokens (no more, no less)
-        # This is because unpatchify expects exactly seq_len tokens to reconstruct the image
         tokens_to_generate = self.seq_len
         
-        # print(f"DEBT generating {tokens_to_generate} tokens for {self.seq_h}x{self.seq_w} image patches")
-        # print(f"Requested num_iter: {num_iter}, but using seq_len: {tokens_to_generate}")
             
         device = next(self.parameters()).device
         if labels is None:
             labels = torch.randint(0, self.y_embedder.num_embeddings - 1, (bsz,), device=device)
         
-        # Disable gradient computation for model parameters during inference
         was_training = self.training
         self.eval()
         
         # Get class conditioning
         with torch.no_grad():
-            time_embeddings = self.y_embedder(labels)
+            cond_embeddings = self.y_embedder(labels)
         
         # Initialize with start token
         start_tokens = self.start_token.expand(bsz, 1, -1)
@@ -336,21 +306,17 @@ class DEBT(nn.Module):
             if progress and step % 64 == 0:
                 print(f"Generating token {step}/{tokens_to_generate}")
             
-            # Initialize next token with noise
             if self.denoising_initial_condition == "zeros":
                 next_token = torch.zeros(bsz, 1, self.embed_dim, device=device)
             else:
                 next_token = torch.randn(bsz, 1, self.embed_dim, device=device)
             
-            # Refine the token using MCMC (needs gradients)
             refined_token = self.refine_embeddings_inference(
-                real_prefix, next_token, time_embeddings
+                real_prefix, next_token, cond_embeddings
             )
             
-            # Add refined token to generated sequence
             generated_embeddings.append(refined_token.detach())
             
-            # Update real prefix for next iteration
             real_prefix = torch.cat([real_prefix, refined_token.detach()], dim=1)
         
         # Convert generated embeddings to tokens and reconstruct image
@@ -375,9 +341,8 @@ class DEBT(nn.Module):
 
 
 if __name__ == "__main__":
-    # Test with smaller sequence length for faster testing
     model = DEBT(
-        img_size=64,  # smaller image
+        img_size=64,
         vae_stride=8,
         embed_dim=256,
         depth=4,
@@ -387,8 +352,8 @@ if __name__ == "__main__":
     )
     
     # Create test data
-    seq_len = model.seq_len  # This will be 8*8 = 64 for the above config
-    x = torch.randn(2, 16, 8, 8)  # (B, C, H, W) - matching vae_stride=8
+    seq_len = model.seq_len  # This will be 8*8 = 64
+    x = torch.randn(2, 16, 8, 8)  # (B, C, H, W)
     labels = torch.tensor([0, 1])
     
     print(f"Model sequence length: {seq_len}")
