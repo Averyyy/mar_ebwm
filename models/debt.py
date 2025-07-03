@@ -135,7 +135,9 @@ class DEBT(nn.Module):
         alpha = torch.clamp(self.alpha, min=1e-4)
         langevin_std = torch.clamp(torch.tensor(self.langevin_dynamics_noise), min=1e-6)
         
-        start_tokens = self.start_token.expand(B, 1, -1)  # (B, 1, D)
+        start_tokens = self.start_token.expand(B, 1, D)
+        end_tok_exp = self.end_token.expand(B, 1, D)
+
         
         with torch.set_grad_enabled(True):
             for mcmc_step in range(self.mcmc_num_steps):
@@ -145,14 +147,13 @@ class DEBT(nn.Module):
                     ld_noise = torch.randn_like(predicted_embeddings) * langevin_std
                     predicted_embeddings = predicted_embeddings + ld_noise
                 
-                # real_seq: [<start>] + all S ground-truth tokens  → length S+1
+                # real_seq: [<start>] + all S ground-truth tokens
                 real_seq = torch.cat([start_tokens, real_embeddings], dim=1)  # (B, S+1, D)
                 
-                # pred_seq: [predicted_tokens] + <end>  → length S+1
-                end_tok_exp = self.end_token.expand(B, 1, -1)
+                # pred_seq: [predicted_tokens] + <end>
                 pred_seq = torch.cat([predicted_embeddings, end_tok_exp], dim=1)  # (B, S+1, D)
                 
-                # Concatenate real and predicted sequences for EBT: total length 2*(S+1)
+                # Concatenate real and predicted sequences for EBT
                 all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*(S+1), D)
                 
                 pos_embed_slice = self.pos_embed[:, :all_embeddings.size(1), :]
@@ -226,7 +227,6 @@ class DEBT(nn.Module):
                 pred_seq[:, current_pos:current_pos + 1] = predicted_token  # current token being refined
                 pred_seq[:, -1] = self.end_token.squeeze(0)
                 
-                # Concatenate for EBT
                 all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*(seq_len+1), D)
                 
                 # Add positional embeddings
