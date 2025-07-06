@@ -300,6 +300,9 @@ class Attention(nn.Module):
         # self.cache_k[:bsz, start_pos : start_pos + seqlen] = xk
         # self.cache_v[:bsz, start_pos : start_pos + seqlen] = xv
 
+        # keys = self.cache_k[:bsz, : start_pos + seqlen]
+        # values = self.cache_v[:bsz, : start_pos + seqlen]
+
         # # repeat k/v heads if n_kv_heads < n_heads # this does nothing since self.n_rep = 1
         # keys = repeat_kv(keys, self.n_rep)  # (bs, cache_len + seqlen, n_local_heads, head_dim)
         # values = repeat_kv(values, self.n_rep)  # (bs, cache_len + seqlen, n_local_heads, head_dim)
@@ -598,15 +601,12 @@ class EBTAdaLN(nn.Module):
         
         time_embeddings = None
         if mcmc_step is not None:
-            # Generate a learnable time embedding for the current MCMC step
             mcmc_ids = torch.full(size=(_bsz,), fill_value=mcmc_step, device=embeddings.device, dtype=torch.long)
             mcmc_time_emb = self.time_embeddings(mcmc_ids)
         else:
             mcmc_time_emb = None
 
-        # Combine external conditioning `c` (if provided) with the MCMC step embedding
         if c is not None and mcmc_time_emb is not None:
-            # When both are present, fuse them by simple addition (same dimensionality)
             time_embeddings = c + mcmc_time_emb
         elif c is not None:
             time_embeddings = c

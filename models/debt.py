@@ -270,37 +270,65 @@ class DEBT(nn.Module):
         # Compute reconstruction loss
         return ((recon - x_start) ** 2).mean()
 
-    def sample_tokens(self, bsz, num_iter=None, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=False):
+    def sample_tokens(self, bsz, num_iter=None, cfg=1.0, cfg_schedule="linear", labels=None, temperature=1.0, progress=False, gt_prefix_tokens=None):       
         """
         Autoregressive sampling during inference.
         
+                
         Generates tokens one by one:
         Step 1: real: [<start>], pred: [<pred_token_0>]
         Step 2: real: [<start> <pred_token_0>], pred: [<pred_token_1>]
         ...
-        
-        """
+
+        If gt_prefix_tokens is provided (B, prefix_len, token_embed_dim), the first
+        half (or arbitrary prefix length) of the sequence will be taken directly
+        from these ground-truth tokens and only the remaining tokens will be
+        generated autoregressively.
+        """  
         print("DEBT sampling started")
         
+        # total tokens to generate in a full image (flattened patch grid)
         tokens_to_generate = self.seq_len
-        
-            
+
         device = next(self.parameters()).device
         if labels is None:
             labels = torch.randint(0, self.y_embedder.num_embeddings - 1, (bsz,), device=device)
-        
+
         was_training = self.training
         self.eval()
-        
+
         # Get class conditioning
         with torch.no_grad():
             cond_embeddings = self.y_embedder(labels)
-        
+
         # Initialize with start token
         start_tokens = self.start_token.expand(bsz, 1, -1)
         real_prefix = start_tokens.clone()
-        generated_embeddings = []
-        
+        generated_embeddings = []  # list[(B,1,D)]
+
+        # ------------------------------------------------------------
+        # Optional: prepend ground-truth prefix tokens
+        # ------------------------------------------------------------
+        if gt_prefix_tokens is not None:
+            # gt_prefix_tokens shape: (B, prefix_len, token_embed_dim)
+
+            # Project to embedding space
+            prefix_embeddings = self.input_proj(gt_prefix_tokens.to(device))  # (B, L, D)
+            prefix_len = prefix_embeddings.size(1)
+            assert prefix_len <= self.seq_len, "Prefix length exceeds total sequence length"
+
+            # Update bookkeeping
+            tokens_to_generate = self.seq_len - prefix_len
+
+            # Update prefix context for subsequent generation
+            real_prefix = torch.cat([real_prefix, prefix_embeddings.detach()], dim=1)  # (B, 1+L, D)
+
+            # Store prefix tokens for later reconstruction (avoid passing through
+            # output_proj again, which would degrade them).
+            tokens_prefix = gt_prefix_tokens.to(device)
+        else:
+            tokens_prefix = None
+
         # Generate exactly seq_len tokens autoregressively
         for step in range(tokens_to_generate):
             if progress and step % 64 == 0:
@@ -321,17 +349,22 @@ class DEBT(nn.Module):
         
         # Convert generated embeddings to tokens and reconstruct image
         with torch.no_grad():
-            all_generated = torch.cat(generated_embeddings, dim=1)  # (B, seq_len, embed_dim)
-            
-            # print(f"Generated embeddings shape: {all_generated.shape}")
-            # print(f"Expected shape: ({bsz}, {self.seq_len}, {self.embed_dim})")
-            
-            pred_tokens = self.output_proj(all_generated)  # (B, seq_len, token_embed_dim)
-            # print(f"Pred tokens shape: {pred_tokens.shape}")
-            # print(f"Expected shape: ({bsz}, {self.seq_len}, {self.token_embed_dim})")
-            
+            if tokens_to_generate > 0:
+                all_generated = torch.cat(generated_embeddings, dim=1)  # (B, seq_len - L, embed_dim)
+                generated_tokens = self.output_proj(all_generated)  # (B, seq_len - L, token_embed_dim)
+            else:
+                generated_tokens = torch.empty(bsz, 0, self.token_embed_dim, device=device)
+
+            # Combine ground-truth prefix tokens (if any) with generated tokens
+            if gt_prefix_tokens is not None:
+                pred_tokens = torch.cat([tokens_prefix, generated_tokens], dim=1)
+            else:
+                pred_tokens = generated_tokens  # no prefix case = full generation
+
+            # Safety check
+            assert pred_tokens.size(1) == self.seq_len, "Pred tokens length mismatch"
+
             result = self.unpatchify(pred_tokens)  # (B, C, H, W)
-            # print(f"Final image shape: {result.shape}")
         
         # Restore training mode
         if was_training:

@@ -373,3 +373,74 @@ def validate_one_epoch(model, vae, data_loader, device):
 
     avg_loss = misc.all_reduce_mean(loss_sum) / misc.all_reduce_mean(n_samples)
     return avg_loss
+
+# --------------------------- DEBUG FUNCTION (FOR DEBT)---------------------------
+def log_preview_half(model, vae, data_loader, args, epoch, class_id_to_name=None):
+    """log preview images with half ground-truth tokens"""
+    if not misc.is_main_process():
+        return
+
+    device = next(model.parameters()).device
+
+    torch.manual_seed(args.preview_seed)
+    np.random.seed(args.preview_seed)
+
+    label_list = [int(x) for x in args.preview_labels.split(',') if x != '']
+    needed = set(label_list)
+
+    latents_per_label = {}
+    with torch.no_grad():
+        for imgs_batch, lbls_batch in data_loader:
+            imgs_batch = imgs_batch.to(device, non_blocking=True)
+            lbls_batch = lbls_batch.to(device, non_blocking=True)
+
+            if args.use_cached:
+                posterior = DiagonalGaussianDistribution(imgs_batch)
+            else:
+                posterior = vae.encode(imgs_batch)
+            latents_batch = posterior.sample().mul_(0.2325)
+
+            for j in range(lbls_batch.size(0)):
+                lbl_int = int(lbls_batch[j].item())
+                if lbl_int in needed and lbl_int not in latents_per_label:
+                    latents_per_label[lbl_int] = latents_batch[j:j+1]
+                if len(latents_per_label) == len(needed):
+                    break
+            if len(latents_per_label) == len(needed):
+                break
+
+    latents = torch.cat([latents_per_label[lbl] for lbl in label_list], dim=0)
+
+    prefix_len = model.seq_len // 2
+    gt_tokens = model.patchify(latents)
+    gt_prefix_tokens = gt_tokens[:, :prefix_len, :].contiguous()
+
+    preview_labels_tensor = torch.tensor(label_list, device=device, dtype=torch.long)
+
+    with torch.no_grad():
+        token_latents = model.sample_tokens(
+            bsz=len(label_list),
+            num_iter=args.preview_iter,
+            cfg=args.cfg,
+            cfg_schedule=args.cfg_schedule,
+            labels=preview_labels_tensor,
+            temperature=args.temperature,
+            gt_prefix_tokens=gt_prefix_tokens,
+            progress=False,
+        )
+        imgs = vae.decode(token_latents / 0.2325).clamp(-1, 1)
+
+    run_dir = args.run_name if hasattr(args, "run_name") and args.run_name else "preview_half"
+    out_dir = os.path.join(args.output_dir, run_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    log_images = []
+    for i, lbl in enumerate(label_list):
+        img_np = ((imgs[i].cpu().numpy().transpose(1, 2, 0) + 1) * 127.5).round().clip(0, 255).astype(np.uint8)
+        cv2.imwrite(os.path.join(out_dir, f"epoch{epoch:04d}_{lbl}.png"), img_np[:, :, ::-1])
+
+        cls_name = class_id_to_name.get(lbl, "") if class_id_to_name else ""
+        caption = f"class {lbl}: {cls_name}" if cls_name else f"class {lbl}"
+        log_images.append(wandb.Image(img_np, caption=caption))
+
+    wandb.log({"epoch": epoch, "preview_half": log_images})

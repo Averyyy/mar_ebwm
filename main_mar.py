@@ -17,7 +17,7 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.loader import CachedFolder
 
 from models.vae import AutoencoderKL
-from engine_mar import train_one_epoch, evaluate, log_preview, validate_one_epoch
+from engine_mar import train_one_epoch, evaluate, log_preview, validate_one_epoch, log_preview_half
 import copy
 import wandb
 
@@ -200,6 +200,9 @@ def get_args_parser():
     parser.add_argument('--val', action='store_true',
                         help='disable validation completely')
 
+    # Debug: half sampling
+    parser.add_argument('--test_half_sampling', action='store_true',
+                        help='Debug mode: feed half ground-truth tokens then generate the rest')
 
     return parser
 
@@ -443,6 +446,12 @@ def main(args):
         cls_map = {}
     class_id_to_name = cls_map
 
+    # ------------------------------------------------------------
+    # Debug: ground-truth half sampling preview (no training)
+    # ------------------------------------------------------------
+    if args.test_half_sampling:
+        log_preview_half(model_without_ddp, vae, data_loader_train, args, epoch=args.start_epoch, class_id_to_name=class_id_to_name)
+        return
 
     # training
     print(f"Start training for {args.epochs} epochs")
