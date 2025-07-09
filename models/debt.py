@@ -52,8 +52,9 @@ class DEBT(nn.Module):
         self.finished_warming_up = False
 
         self.y_embedder = nn.Embedding(class_num + 1, embed_dim)
-        # Position embedding for 2*(seq_len+1) ‑- extra slot for <start>/<end>
-        self.pos_embed = nn.Parameter(torch.zeros(1, 2 * (self.seq_len + 1), embed_dim))
+        # Learnable positional embedding shared by real & pred sequences.
+        # Length = S+2  (positions 0..S for real seq, 1..S+1 for pred seq)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.seq_len + 2, embed_dim))
         self.start_token = nn.Parameter(torch.randn(1, embed_dim))
         self.end_token = nn.Parameter(torch.randn(1, embed_dim))
         self.double_condition = double_condition
@@ -153,11 +154,13 @@ class DEBT(nn.Module):
                 # pred_seq: [predicted_tokens] + <end>
                 pred_seq = torch.cat([predicted_embeddings, end_tok_exp], dim=1)  # (B, S+1, D)
                 
-                # Concatenate real and predicted sequences for EBT
+                # Add positional embeddings: real uses indices 0..S, pred uses 1..S+1 (shift by +1)
+                real_seq_pe = self.pos_embed[:, :real_seq.size(1), :]
+                pred_seq_pe = self.pos_embed[:, 1:1 + pred_seq.size(1), :]
+                real_seq = real_seq + real_seq_pe
+                pred_seq = pred_seq + pred_seq_pe
+
                 all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*(S+1), D)
-                
-                pos_embed_slice = self.pos_embed[:, :all_embeddings.size(1), :]
-                all_embeddings = all_embeddings + pos_embed_slice
                 
                 # EBT forward pass
                 energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=cond_embeddings)
@@ -227,21 +230,16 @@ class DEBT(nn.Module):
                 pred_seq[:, current_pos:current_pos + 1] = predicted_token  # current token being refined
                 pred_seq[:, -1] = self.end_token.squeeze(0)
                 
+                # Add positional embeddings with shift (same logic as training)
+                real_seq_pe = self.pos_embed[:, :real_seq.size(1), :]
+                pred_seq_pe = self.pos_embed[:, 1:1 + pred_seq.size(1), :]
+                real_seq = real_seq + real_seq_pe
+                pred_seq = pred_seq + pred_seq_pe
+
                 all_embeddings = torch.cat([real_seq, pred_seq], dim=1)  # (B, 2*(seq_len+1), D)
-                
-                # Add positional embeddings
-                pos_embed_slice = self.pos_embed[:, :all_embeddings.size(1), :]
-                all_embeddings = all_embeddings + pos_embed_slice
-                
-                # if mcmc_step == 0:
-                #     print(f"All embeddings shape: {all_embeddings.shape}")
-                #     print(f"Pos embed slice shape: {pos_embed_slice.shape}")
                 
                 # Get energy prediction
                 energy_preds = self.transformer(all_embeddings, start_pos=0, mcmc_step=mcmc_step, c=cond_embeddings)
-                
-                # if mcmc_step == 0:
-                #     print(f"Energy preds shape: {energy_preds.shape}")
                 
                 # Extract energy for current predicted token
                 energy_sum = energy_preds[:, current_pos, 0].sum()

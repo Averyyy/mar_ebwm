@@ -288,10 +288,10 @@ class Attention(nn.Module):
         xk_p = xk[:, original_seqlen:, :, :]
         xv_p = xv[:, original_seqlen:, :, :]
 
-        xq_o, xk_o = apply_rotary_emb(xq_o, xk_o, freqs_cis=freqs_cis[:original_seqlen])
+        # xq_o, xk_o = apply_rotary_emb(xq_o, xk_o, freqs_cis=freqs_cis[:original_seqlen])
 
         # use 1 since are the next preds and thus need to condition on a frame
-        xq_p, xk_p = apply_rotary_emb(xq_p, xk_p, freqs_cis=freqs_cis[1:context_length])
+        # xq_p, xk_p = apply_rotary_emb(xq_p, xk_p, freqs_cis=freqs_cis[1:context_length])
         # I tested this compared to prepending row on S dimension and the tensors were the same
 
         # self.cache_k = self.cache_k.to(xq)
