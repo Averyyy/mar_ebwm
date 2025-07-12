@@ -141,9 +141,9 @@ def get_args_parser():
     parser.set_defaults(use_cached=False)
     parser.add_argument('--cached_path', default='', help='path to cached latents')
     
-    # ddit selection
-    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt'],
-                        help="Type of model to run ('mar' for MAR or 'ddit' for DDiT or debt)")
+    # model selection
+    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion'],
+                        help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED)")
 
     # DDiT-specific parameters (only used if --model_type ddit is specified)
     parser.add_argument('--run_name', default='ddit', help='name of the run for logging')
@@ -180,16 +180,14 @@ def get_args_parser():
     # preview sampling parameters
     parser.add_argument('--preview', action='store_true',
                         help='turn on epoch-wise preview sampling')
-    parser.add_argument('--preview_interval', type=int, default=1,
+    parser.add_argument('--preview_interval', type=int, default=10,
                         help='log preview every N epochs (ignored if --preview_epochs given)')
     parser.add_argument('--preview_epochs', type=str, default='',
                         help='comma-separated epoch numbers to preview, e.g. "0,5,10"')
-    parser.add_argument('--preview_labels', type=str, default='0,1,2,3,4,5,6',
+    parser.add_argument('--preview_labels', type=str, default='0,1,2',
                         help='comma-separated ImageNet class ids to preview')
     parser.add_argument('--preview_seed', type=int, default=42,
                         help='global torch seed so that the SAME noise is reused each epoch')
-    parser.add_argument('--preview_iter', type=int, default=64,
-                        help='num_iter fed to model.sample_tokens() when previewing')
     
     parser.add_argument('--val_data_path',
                         default='/work/nvme/belh/aqian1/imagenet-1k/val/images',
@@ -203,6 +201,11 @@ def get_args_parser():
     # Debug: half sampling
     parser.add_argument('--test_half_sampling', action='store_true',
                         help='Debug mode: feed half ground-truth tokens then generate the rest')
+
+    parser.add_argument('--syn_dataloader', action='store_true',
+                        help='Use synthetic dataloader (random data) instead of loading from disk')
+    parser.add_argument('--syn_dataset_len', default=1281167, type=int,
+                        help='Number of synthetic samples to generate when using --syn_dataloader')
 
     return parser
 
@@ -239,7 +242,12 @@ def main(args):
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
     ])
 
-    if args.use_cached:
+    if args.syn_dataloader:
+        from util.synthetic_dataset import SyntheticDataset
+        dataset_train = SyntheticDataset(num_samples=args.syn_dataset_len,
+                                         img_size=args.img_size,
+                                         num_classes=args.class_num)
+    elif args.use_cached:
         dataset_train = CachedFolder(args.cached_path)
     else:
         dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
@@ -338,6 +346,30 @@ def main(args):
                 mcmc_step_size=args.mcmc_step_size,
                 langevin_dynamics_noise=args.langevin_dynamics_noise,
                 denoising_initial_condition=args.denoising_initial_condition,
+            )
+    elif args.model_type == "debt_diffusion":
+        from models import debt_diffusion
+        # Check if args.model specifies a DEBT_diffusion variant
+        if hasattr(debt_diffusion, args.model):
+            model = debt_diffusion.__dict__[args.model](
+                img_size=args.img_size,
+                vae_stride=args.vae_stride,
+                patch_size=args.patch_size,
+                class_num=args.class_num,
+                diffusion_timesteps=getattr(args, 'diffusion_timesteps', 10),
+            )
+        else:
+            # Fallback to manual specification
+            from models.debt_diffusion import DEBTDiffusion
+            model = DEBTDiffusion(
+                img_size=args.img_size,
+                vae_stride=args.vae_stride,
+                patch_size=args.patch_size,
+                embed_dim=getattr(args, 'embed_dim', 1024),
+                depth=getattr(args, 'depth', 16),
+                num_heads=getattr(args, 'num_heads', 16),
+                class_num=args.class_num,
+                diffusion_timesteps=getattr(args, 'diffusion_timesteps', 10),
             )
     else:
         from models import mar

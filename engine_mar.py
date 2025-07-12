@@ -333,7 +333,7 @@ def log_preview(model, vae, args, epoch, class_id_to_name=None):
     with torch.no_grad():
         token_latents = model.sample_tokens(
             bsz=len(labels),
-            num_iter=args.preview_iter,
+            num_iter=args.num_iter,
             cfg=args.cfg,
             cfg_schedule=args.cfg_schedule,
             labels=labels,
@@ -420,7 +420,7 @@ def log_preview_half(model, vae, data_loader, args, epoch, class_id_to_name=None
     with torch.no_grad():
         token_latents = model.sample_tokens(
             bsz=len(label_list),
-            num_iter=args.preview_iter,
+            num_iter=args.num_iter,
             cfg=args.cfg,
             cfg_schedule=args.cfg_schedule,
             labels=preview_labels_tensor,

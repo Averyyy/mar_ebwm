@@ -7,3 +7,5 @@ logs/
 
 slurm/
 slurm/job_configs/
+
+core
