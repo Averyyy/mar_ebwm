@@ -274,6 +274,9 @@ def cache_latents(vae,
     header = 'Caching: '
     print_freq = 20
 
+    # Ensure cache directory exists
+    os.makedirs(args.cached_path, exist_ok=True)
+
     last_idx_file = os.path.join(args.cached_path, 'last_idx.txt')
     start_iter = 0
     if os.path.exists(last_idx_file):
@@ -282,11 +285,22 @@ def cache_latents(vae,
         except Exception:
             start_iter = 0
 
-    for data_iter_step, (samples, _, paths) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    shard_buffer_m = []
+    shard_buffer_f = []
+    shard_buffer_lbl = []
+    shard_id = 0
+
+    # Parse selected classes for caching
+    selected_class_set = None
+    if getattr(args, 'cache_classes', ''):
+        selected_class_set = set([cls.strip() for cls in args.cache_classes.split(',') if cls.strip()])
+
+    for data_iter_step, (samples, labels, paths) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         if data_iter_step < start_iter:
             continue
 
         samples = samples.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
         try:
             with torch.no_grad():
@@ -296,11 +310,44 @@ def cache_latents(vae,
                 moments_flip = posterior_flip.parameters
 
             for i, path in enumerate(paths):
-                save_path = os.path.join(args.cached_path, path + '.npz')
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                np.savez(save_path,
-                         moments=moments[i].cpu().numpy(),
-                         moments_flip=moments_flip[i].cpu().numpy())
+                if selected_class_set is not None:
+                    class_dir = path.split(os.sep)[0]
+                    if class_dir not in selected_class_set:
+                        # skip caching this sample
+                        continue
+
+                cache_fmt = getattr(args, 'cache_format', 'npz')
+                if cache_fmt == 'ptshard':
+                    # Accumulate into shard buffer
+                    shard_buffer_m.append(moments[i].half().cpu())
+                    shard_buffer_f.append(moments_flip[i].half().cpu())
+                    shard_buffer_lbl.append(labels[i].cpu())
+
+                    if len(shard_buffer_m) >= getattr(args, 'cache_shard_size', 20000):
+                        save_path = os.path.join(args.cached_path, f'shard_{shard_id:05d}.pt')
+                        torch.save({
+                            'moments': torch.stack(shard_buffer_m),
+                            'moments_flip': torch.stack(shard_buffer_f),
+                            'labels': torch.stack(shard_buffer_lbl),
+                        }, save_path)
+                        shard_id += 1
+                        shard_buffer_m, shard_buffer_f, shard_buffer_lbl = [], [], []
+
+                elif cache_fmt == 'pt':
+                    # Save as uncompressed torch tensor dict for faster loading
+                    save_path = os.path.join(args.cached_path, path + '.pt')
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    torch.save({
+                        'moments': moments[i].half().cpu(),
+                        'moments_flip': moments_flip[i].half().cpu(),
+                    }, save_path)
+                else:
+                    # Fallback to original compressed npz behaviour
+                    save_path = os.path.join(args.cached_path, path + '.npz')
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    np.savez(save_path,
+                             moments=moments[i].cpu().numpy(),
+                             moments_flip=moments_flip[i].cpu().numpy())
 
             if misc.is_dist_avail_and_initialized():
                 torch.cuda.synchronize()
@@ -313,6 +360,15 @@ def cache_latents(vae,
 
         with open(last_idx_file, 'w') as f:
             f.write(str(data_iter_step + 1))
+
+    # Flush remaining shard buffer
+    if getattr(args, 'cache_format', 'npz') == 'ptshard' and len(shard_buffer_m) > 0:
+        save_path = os.path.join(args.cached_path, f'shard_{shard_id:05d}.pt')
+        torch.save({
+            'moments': torch.stack(shard_buffer_m),
+            'moments_flip': torch.stack(shard_buffer_f),
+            'labels': torch.stack(shard_buffer_lbl),
+        }, save_path)
 
     return
 

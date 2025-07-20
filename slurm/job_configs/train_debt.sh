@@ -68,28 +68,51 @@
 # echo "--- DEBT Energy Training job ${SLURM_ARRAY_TASK_ID} completed ---" 
 
 
-torchrun \
-    --nproc_per_node=1 \
-    main_mar.py \
-    --run_name debt-test-1 \
-    --img_size 64 \
-    --vae_path pretrained_models/vae/kl16.ckpt \
-    --model_type debt \
-    --model debt_2xs \
-    --mcmc_num_steps 2 \
-    --mcmc_step_size 10 \
-    --mcmc_step_size_lr_multiplier 30 \
-    --epochs 200 \
-    --warmup_epochs 20 \
-    --batch_size 2048 \
-    --grad_accu 1 \
-    --blr 1e-5 \
-    --lr_schedule cosine \
-    --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/debt-test-1 \
-    --preview \
-    --syn_dataloader \
-    --syn_dataset_len 100000 \
-    --seed 42
+# torchrun \
+#     --nproc_per_node=1 \
+#     main_mar.py \
+#     --run_name debt-test-gpu \
+#     --img_size 64 \
+#     --vae_path pretrained_models/vae/kl16.ckpt \
+#     --model_type debt \
+#     --model debt_2xs \
+#     --mcmc_num_steps 2 \
+#     --mcmc_step_size 10 \
+#     --mcmc_step_size_lr_multiplier 30 \
+#     --epochs 200 \
+#     --warmup_epochs 20 \
+#     --batch_size 2048 \
+#     --grad_accu 1 \
+#     --blr 1e-5 \
+#     --lr_schedule cosine \
+#     --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/debt-test-1 \
+#     --use_cached \
+#     --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64-ptshard \
+#     --cached_format ptshard \
+#     --preview \
+#     --seed 42
 
-    # --use_cached \
-    # --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64-c10 \
+
+
+torchrun \
+  --nproc_per_node=1 \
+  main_mar.py \
+  --run_name energy-mini-64 \
+  --img_size 64 \
+  --vae_path pretrained_models/vae/kl16.ckpt \
+  --model_type energy_diffusion \
+  --dit_model DiT-S/2 \
+  --diffusion_timesteps 500 \
+  --energy_loss_weight 0 \
+  --epochs 1600 \
+  --warmup_epochs 160 \
+  --batch_size 1024 \
+  --blr 1e-5 \
+  --lr_schedule cosine \
+  --use_cached \
+  --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64-ptshard \
+  --cached_format ptshard \
+  --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/energy_mini \
+  --seed 42 \
+  --preview \
+  --preview_interval 1

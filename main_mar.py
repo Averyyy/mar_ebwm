@@ -140,10 +140,16 @@ def get_args_parser():
                         help='Use cached latents')
     parser.set_defaults(use_cached=False)
     parser.add_argument('--cached_path', default='', help='path to cached latents')
+    parser.add_argument('--cached_format', default='npz', choices=['npz', 'pt', 'ptshard'],
+                        help='Format of cached latents (npz or pt or ptshard)')
     
     # model selection
-    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion'],
-                        help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED)")
+    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion', 'energy_diffusion'],
+                         help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED, 'energy_diffusion' for energy-based diffusion)")
+    # ---------------- Energy Diffusion args (re-added) ----------------
+    parser.add_argument('--dit_model', type=str, default=None, help='[EnergyDiffusion] DiT model size, e.g. DiT-B/4. Overrides embed_dim, depth, num_heads')
+    parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='[EnergyDiffusion] Number of diffusion timesteps')
+    parser.add_argument('--energy_loss_weight', default=0.1, type=float, help='[EnergyDiffusion] Energy loss weight')
 
     # DDiT-specific parameters (only used if --model_type ddit is specified)
     parser.add_argument('--run_name', default='ddit', help='name of the run for logging')
@@ -247,6 +253,12 @@ def main(args):
         dataset_train = SyntheticDataset(num_samples=args.syn_dataset_len,
                                          img_size=args.img_size,
                                          num_classes=args.class_num)
+    elif args.use_cached and args.cached_format == 'ptshard':
+        from util.cached_pt_shard import CachedPTShard
+        dataset_train = CachedPTShard(args.cached_path)
+    elif args.use_cached and args.cached_format == 'pt':
+        from util.cached_pt_dataset import CachedPTFolder
+        dataset_train = CachedPTFolder(args.cached_path)
     elif args.use_cached:
         dataset_train = CachedFolder(args.cached_path)
     else:
@@ -370,6 +382,38 @@ def main(args):
                 num_heads=getattr(args, 'num_heads', 16),
                 class_num=args.class_num,
                 diffusion_timesteps=getattr(args, 'diffusion_timesteps', 10),
+            )
+    elif args.model_type == "energy_diffusion":
+        from models.energy_diffusion import EnergyDiffusion
+        from models.dit.dit_energy import DiT, DiT_models
+ 
+        if args.dit_model and args.dit_model in DiT_models:
+            dit_energy_model = DiT_models[args.dit_model](
+                seq_len=(args.img_size // args.vae_stride // args.patch_size)**2,
+                in_dim=args.vae_embed_dim * args.patch_size**2,
+                class_dropout_prob=args.label_drop_prob,
+                num_classes=args.class_num,
+            )
+        else:
+            dit_energy_model = DiT(
+                seq_len=(args.img_size // args.vae_stride // args.patch_size)**2,
+                in_dim=args.vae_embed_dim * args.patch_size**2,
+                hidden_size=args.embed_dim,
+                depth=args.depth,
+                num_heads=args.num_heads,
+                mlp_ratio=args.mlp_ratio,
+                class_dropout_prob=args.label_drop_prob,
+                num_classes=args.class_num,
+            )
+ 
+        model = EnergyDiffusion(
+            dit_energy_model,
+            image_size=args.img_size,
+            vae_stride=args.vae_stride,
+            patch_size=args.patch_size,
+            timesteps=args.diffusion_timesteps,
+            sampling_timesteps=int(args.num_sampling_steps),
+            energy_loss_weight=args.energy_loss_weight,
             )
     else:
         from models import mar

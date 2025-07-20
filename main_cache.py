@@ -56,6 +56,14 @@ def get_args_parser():
 
     # caching latents
     parser.add_argument('--cached_path', default='', help='path to cached latents')
+    parser.add_argument('--cache_format', default='npz', choices=['npz', 'pt', 'ptshard'],
+                        help='Format to save cached latents (npz for compressed, pt for uncompressed, ptshard for sharded pt)')
+    parser.add_argument('--cache_shard_size', default=20000, type=int,
+                        help='Number of samples per shard when --cache_format ptshard')
+
+    # Selective caching options
+    parser.add_argument('--cache_classes', default='', type=str,
+                        help='Comma-separated list of ImageNet class folder names (e.g. n01440764,n01443537). If provided, only images whose directory name is in this list will be cached.')
 
     return parser
 
@@ -89,7 +97,26 @@ def main(args):
     ])
 
     dataset_train = ImageFolderWithFilename(os.path.join(args.data_path, 'train'), transform=transform_train)
-    print(dataset_train)
+
+    # If selective caching, filter dataset to only requested class folders
+    if args.cache_classes:
+        selected_set = set([cls.strip() for cls in args.cache_classes.split(',') if cls.strip()])
+        filtered_samples = []
+        filtered_targets = []
+        for path, target in dataset_train.samples:
+            class_dir = os.path.basename(os.path.dirname(path))
+            if class_dir in selected_set:
+                filtered_samples.append((path, target))
+                filtered_targets.append(target)
+
+        dataset_train.samples = filtered_samples
+        dataset_train.targets = filtered_targets
+        # Attribute `imgs` is an alias used internally by ImageFolder
+        dataset_train.imgs = filtered_samples
+
+        print(f"Filtered dataset to {len(dataset_train)} samples from classes {selected_set}")
+    else:
+        print(dataset_train)
 
     sampler_train = torch.utils.data.DistributedSampler(
         dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=False,
