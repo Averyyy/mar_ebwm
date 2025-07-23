@@ -102,10 +102,15 @@ class DiTBlock(nn.Module):
     """
     A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, use_energy=False, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        
         self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
+        
+        # Disable flash attention for energy mode to support second-order gradients
+        if use_energy and hasattr(self.attn, 'fused_attn'):
+            self.attn.fused_attn = False
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -120,6 +125,26 @@ class DiTBlock(nn.Module):
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
+
+
+class EnergyLayer(nn.Module):
+    """
+    Energy layer that outputs a scalar energy value.
+    """
+    def __init__(self, input_dim):
+        super().__init__()
+        self.energy_head = nn.Sequential(
+            nn.Linear(input_dim, input_dim // 2),
+            nn.SiLU(),
+            nn.Linear(input_dim // 2, 1)
+        )
+    
+    def forward(self, x):
+        # x: (N, T, D) -> energy: (N, 1)
+        # Global average pooling over sequence dimension, then map to scalar
+        x_pooled = x.mean(dim=1)  # (N, D)
+        energy = self.energy_head(x_pooled)  # (N, 1)
+        return energy
 
 
 class FinalLayer(nn.Module):
@@ -158,11 +183,16 @@ class DiT(nn.Module):
         class_dropout_prob=0.1,
         num_classes=1000,
         learn_sigma=True,
+        use_energy=False,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
+        self.use_energy = use_energy
         self.in_channels = in_channels
-        self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        if use_energy:
+            self.out_channels = 1  # Energy mode: output scalar energy per patch
+        else:
+            self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
 
@@ -174,9 +204,11 @@ class DiT(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, use_energy=use_energy) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        if use_energy:
+            self.energy_layer = EnergyLayer(hidden_size)
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -214,6 +246,14 @@ class DiT(nn.Module):
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
+        
+        # Initialize energy layer if it exists:
+        if hasattr(self, 'energy_layer'):
+            for layer in self.energy_layer.energy_head:
+                if isinstance(layer, nn.Linear):
+                    nn.init.xavier_uniform_(layer.weight)
+                    if layer.bias is not None:
+                        nn.init.constant_(layer.bias, 0)
 
     def unpatchify(self, x):
         """
@@ -230,22 +270,45 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, y):
+    def forward(self, x, t, y, return_energy=False, return_both=False):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
+        return_energy: Return only energy (for energy mode)
+        return_both: Return both energy and gradients (for energy mode)
         """
-        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
-        c = t + y                                # (N, D)
-        for block in self.blocks:
-            x = block(x, c)                      # (N, T, D)
-        x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        x = self.unpatchify(x)                   # (N, out_channels, H, W)
-        return x
+        if self.use_energy:
+            # For energy mode, we need gradients even during sampling
+            with torch.enable_grad():
+                x_in = x.requires_grad_(True)
+                
+                x = self.x_embedder(x_in) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+                t = self.t_embedder(t)                   # (N, D)
+                y = self.y_embedder(y, self.training)    # (N, D)
+                c = t + y                                # (N, D)
+                for block in self.blocks:
+                    x = block(x, c)                      # (N, T, D)
+                
+                # Energy mode: use EnergyLayer to compute scalar energy
+                energy = self.energy_layer(x)            # (N, 1)
+                
+                if return_energy:
+                    return energy
+                else:
+                    gradients = torch.autograd.grad(energy.sum(), x_in, create_graph=True)[0]
+                    return (energy, gradients) if return_both else gradients
+        else:
+            x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+            t = self.t_embedder(t)                   # (N, D)
+            y = self.y_embedder(y, self.training)    # (N, D)
+            c = t + y                                # (N, D)
+            for block in self.blocks:
+                x = block(x, c)                      # (N, T, D)
+            x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
+            x = self.unpatchify(x)               # (N, out_channels, H, W)
+            return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
         """
@@ -325,6 +388,9 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   DiT Configs                                  #
 #################################################################################
 
+def DiT_XL_1(**kwargs):
+    return DiT(depth=28, hidden_size=1152, patch_size=1, num_heads=16, **kwargs)
+
 def DiT_XL_2(**kwargs):
     return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
@@ -352,6 +418,9 @@ def DiT_B_4(**kwargs):
 def DiT_B_8(**kwargs):
     return DiT(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
 
+def DiT_S_1(**kwargs):
+    return DiT(depth=12, hidden_size=384, patch_size=1, num_heads=6, **kwargs)
+
 def DiT_S_2(**kwargs):
     return DiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
 
@@ -366,5 +435,5 @@ DiT_models = {
     'DiT-XL/2': DiT_XL_2,  'DiT-XL/4': DiT_XL_4,  'DiT-XL/8': DiT_XL_8,
     'DiT-L/2':  DiT_L_2,   'DiT-L/4':  DiT_L_4,   'DiT-L/8':  DiT_L_8,
     'DiT-B/2':  DiT_B_2,   'DiT-B/4':  DiT_B_4,   'DiT-B/8':  DiT_B_8,
-    'DiT-S/2':  DiT_S_2,   'DiT-S/4':  DiT_S_4,   'DiT-S/8':  DiT_S_8,
+    'DiT-S/2':  DiT_S_2,   'DiT-S/4':  DiT_S_4,   'DiT-S/8':  DiT_S_8, 'DiT-S/1':  DiT_S_1, 'DiT-XL/1': DiT_XL_1,
 }

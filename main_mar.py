@@ -144,8 +144,8 @@ def get_args_parser():
                         help='Format of cached latents (npz or pt or ptshard)')
     
     # model selection
-    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion', 'energy_diffusion'],
-                         help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED, 'energy_diffusion' for energy-based diffusion)")
+    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion', 'energy_diffusion', 'pure_diffusion'],
+                         help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED, 'energy_diffusion' for energy-based diffusion, 'pure_diffusion' for pure diffusion)")
     # ---------------- Energy Diffusion args (re-added) ----------------
     parser.add_argument('--dit_model', type=str, default=None, help='[EnergyDiffusion] DiT model size, e.g. DiT-B/4. Overrides embed_dim, depth, num_heads')
     parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='[EnergyDiffusion] Number of diffusion timesteps')
@@ -175,6 +175,10 @@ def get_args_parser():
     # Energy MLP specific parameters
     parser.add_argument('--use_energy_loss', action='store_true',
                         help='Use energy-based loss instead of diffusion loss')
+    parser.add_argument('--use_energy', action='store_true',
+                        help='[PureDiffusion] Use IRED-style energy diffusion mode')
+    parser.add_argument('--use_innerloop_opt', action='store_true',
+                        help='[PureDiffusion] Use inner loop optimization during energy diffusion sampling')
     parser.add_argument('--langevin_noise_std', default=0.01, type=float, help='[EnergyMLP] Langevin dynamics noise standard deviation')
     
     parser.add_argument('--grad_accu', default=1, type=int,
@@ -415,6 +419,36 @@ def main(args):
             sampling_timesteps=int(args.num_sampling_steps),
             energy_loss_weight=args.energy_loss_weight,
             )
+    elif args.model_type == "pure_diffusion":
+        from models import pure_diffusion
+        # Check if args.model specifies a pure diffusion variant
+        if hasattr(pure_diffusion, args.model):
+            model = pure_diffusion.__dict__[args.model](
+                img_size=args.img_size,
+                vae_stride=args.vae_stride,
+                patch_size=args.patch_size,
+                vae_embed_dim=args.vae_embed_dim,
+                class_num=args.class_num,
+                class_dropout_prob=args.label_drop_prob,
+                num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
+                use_energy=args.use_energy,
+                use_innerloop_opt=args.use_innerloop_opt,
+            )
+        else:
+            # Fallback to default pure diffusion model 
+            from models.pure_diffusion import PureDiffusion
+            model = PureDiffusion(
+                img_size=args.img_size,
+                vae_stride=args.vae_stride,
+                patch_size=args.patch_size,
+                vae_embed_dim=args.vae_embed_dim,
+                class_num=args.class_num,
+                class_dropout_prob=args.label_drop_prob,
+                num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
+                dit_model=getattr(args, 'dit_model', 'DiT-B/2'),
+                use_energy=args.use_energy,
+                use_innerloop_opt=args.use_innerloop_opt,
+            )
     else:
         from models import mar
         model = mar.__dict__[args.model](
@@ -476,7 +510,7 @@ def main(args):
 
     # log grads/params to wandb once
     if misc.is_main_process():
-        wandb.watch(model_without_ddp, log="all", log_freq=256)
+        wandb.watch(model_without_ddp, log="all", log_freq=50)
 
     # resume training
     if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
