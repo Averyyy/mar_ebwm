@@ -108,6 +108,8 @@ def train_one_epoch(model, vae,
             metric_logger.update(mcmc_step_size=model.module.alpha.item())
         elif hasattr(model.module, "use_energy_loss") and model.module.use_energy_loss:
             metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
+        elif args.model_type == "pure_diffusion" and hasattr(model.module, "alpha"):
+            metric_logger.update(mcmc_step_size=model.module.alpha.item())
 
         loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
         if log_writer is not None:

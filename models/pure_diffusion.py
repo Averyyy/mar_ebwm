@@ -41,6 +41,8 @@ class PureDiffusion(nn.Module):
         # Energy mode
         use_energy=False,
         use_innerloop_opt=False,
+        supervise_energy_landscape=False,
+        mcmc_step_size=0.01,
         
         # Compatibility parameters
         **kwargs
@@ -54,6 +56,10 @@ class PureDiffusion(nn.Module):
         self.num_classes = class_num
         self.use_energy = use_energy
         self.use_innerloop_opt = use_innerloop_opt
+        self.supervise_energy_landscape = supervise_energy_landscape
+        
+        # Learnable MCMC step size parameter (following DEBT pattern)
+        self.alpha = nn.Parameter(torch.tensor(float(mcmc_step_size)), requires_grad=True)
         
         # Initialize DiT model
         # Convert latent tokens to spatial format for DiT
@@ -63,7 +69,7 @@ class PureDiffusion(nn.Module):
             'in_channels': vae_embed_dim,
             'num_classes': class_num,
             'class_dropout_prob': class_dropout_prob,
-            'learn_sigma': False,  # Don't learn variance, only predict noise
+            'learn_sigma': False,
             'use_energy': use_energy,
         }
         
@@ -84,8 +90,6 @@ class PureDiffusion(nn.Module):
             loss_type=loss_type,
         )
         
-        # For compatibility with MAR pipeline
-        self.use_energy_loss = False  # This is a pure diffusion model
     
     def forward(self, x, labels):
         """
@@ -96,23 +100,76 @@ class PureDiffusion(nn.Module):
             labels: Class labels [B]
         
         Returns:
-            Diffusion loss
+            Diffusion loss (or tuple with energy losses if supervise_energy_landscape=True)
         """
         # Sample random timesteps
         bsz = x.shape[0]
         t = torch.randint(0, self.diffusion.num_timesteps, (bsz,), device=x.device)
         
-        # Compute diffusion loss
-        loss = self.diffusion.training_losses(
-            model=self.dit,
-            x_start=x,
-            t=t,
-            model_kwargs={"y": labels}
-        )
-        
-        return loss["loss"].mean()
+        if self.supervise_energy_landscape and self.use_energy:
+            # Add noise to create noisy version
+            noise = torch.randn_like(x)
+            # x_noisy = self.diffusion.q_sample(x_start=x, t=t, noise=noise)
+            
+            # Generate negative samples through energy optimization
+            x_neg_start = x + 3.0 * torch.randn_like(x)  # Start from perturbed version
+            x_neg_noisy = self.diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
+            
+            # Optimize negative samples using energy landscape with learnable alpha
+            x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2)
+            
+            # Predict x0 from optimized negative samples
+            alpha_cumprod = torch.from_numpy(self.diffusion.alphas_cumprod).float().to(t.device)[t]
+            sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
+            sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
+            
+            # Predict x0 from the optimized noisy sample (reverse of q_sample)
+            x_neg_pred = (x_neg_opt - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_opt)) / sqrt_alpha_cumprod
+            x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
+            
+            # Create new noisy versions for energy computation
+            x_pos_noisy = self.diffusion.q_sample(x_start=x, t=t, noise=noise)
+            x_neg_noisy_final = self.diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
+            
+            # Compute energy for both positive and negative samples
+            x_concat = torch.cat([x_pos_noisy, x_neg_noisy_final], dim=0)
+            t_concat = torch.cat([t, t], dim=0)
+            labels_concat = torch.cat([labels, labels], dim=0)
+            
+            energy = self.dit(x_concat, t_concat, labels_concat, return_energy=True)
+            energy_pos, energy_neg = torch.chunk(energy, 2, dim=0)
+            
+            # Compute contrastive energy loss
+            energy_stack = torch.cat([energy_pos, energy_neg], dim=-1)
+            target = torch.zeros(energy_pos.size(0), device=energy_stack.device).long()
+            loss_energy = F.cross_entropy(-1 * energy_stack, target, reduction='none')
+            
+            # Compute standard diffusion loss
+            loss_dict = self.diffusion.training_losses(
+                model=self.dit,
+                x_start=x,
+                t=t,
+                model_kwargs={"y": labels}
+            )
+            loss_mse = loss_dict["loss"]
+            
+            # Combine losses with energy supervision
+            loss_scale = 0.5
+            total_loss = loss_mse + loss_scale * loss_energy.unsqueeze(-1)
+            
+            return total_loss.mean()
+        else:
+            # Standard diffusion training
+            loss = self.diffusion.training_losses(
+                model=self.dit,
+                x_start=x,
+                t=t,
+                model_kwargs={"y": labels}
+            )
+            
+            return loss["loss"].mean()
     
-    def opt_step(self, x, t, labels, step=5, step_size=0.01):
+    def opt_step(self, x, t, labels, step=5, step_size=None):
         """
         Optimization step for energy diffusion following IRED approach.
         Performs gradient descent on energy landscape to refine samples.
@@ -122,13 +179,16 @@ class PureDiffusion(nn.Module):
             t: Timestep [B]
             labels: Class labels [B]
             step: Number of optimization steps
-            step_size: Step size for gradient descent
+            step_size: Step size for gradient descent (if None, uses learnable alpha)
         
         Returns:
             Optimized sample
         """
         if not self.use_energy:
             return x
+            
+        # Use learnable alpha parameter, clamped to prevent instability (following DEBT pattern)
+        alpha = torch.clamp(self.alpha, min=1e-4) if step_size is None else step_size
             
         with torch.enable_grad():
             x_opt = x.clone().requires_grad_(True)
@@ -137,11 +197,8 @@ class PureDiffusion(nn.Module):
                 # Get energy and gradients
                 energy, gradients = self.dit(x_opt, t, labels, return_both=True)
                 
-                # Gradient descent step to minimize energy
-                x_new = x_opt - step_size * gradients.float()
+                x_new = x_opt - alpha * gradients.float()
                 
-                # Clamp values to reasonable range (similar to IRED)
-                # Use the diffusion forward process scaling
                 alpha_cumprod = torch.from_numpy(self.diffusion.alphas_cumprod).float().to(t.device)[t]
                 max_val = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1) * 2.0
                 x_new = torch.clamp(x_new, -max_val, max_val)
@@ -184,24 +241,22 @@ class PureDiffusion(nn.Module):
                 )
                 x = out["sample"]
             
-            # Apply energy optimization if enabled
             if self.use_energy and self.use_innerloop_opt:
-                # More optimization steps for later timesteps (following IRED pattern)
                 opt_steps = 5 if t_val > 1 else 2
-                x = self.opt_step(x, t, labels, step=opt_steps, step_size=0.01)
+                x = self.opt_step(x, t, labels, step=opt_steps)
                 
         return x
     
     def sample_tokens(
         self, 
         bsz, 
-        num_iter=None,  # Ignored for diffusion
+        num_iter=None,  # Ignored
         cfg=1.0, 
-        cfg_schedule="linear",  # Ignored for diffusion
+        cfg_schedule="linear",  # Ignored
         labels=None, 
-        temperature=1.0,  # Ignored for diffusion
+        temperature=1.0,  # Ignored
         progress=False,
-        gt_prefix_tokens=None,  # Ignored for diffusion
+        gt_prefix_tokens=None,  # Ignored
         **kwargs
     ):
         """
@@ -254,7 +309,6 @@ class PureDiffusion(nn.Module):
                     progress=progress
                 )
             else:
-                # Regular sampling
                 samples = self.diffusion.p_sample_loop(
                     model=self.dit,
                     shape=shape,
