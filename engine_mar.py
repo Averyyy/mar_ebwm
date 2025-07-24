@@ -246,7 +246,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         )
         fid = metrics_dict['frechet_inception_distance']
         inception_score = metrics_dict['inception_score_mean']
-        if misc.is_main_process():
+        if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
             wandb.log({"fid": fid, "inception_score": inception_score}, step=epoch)
         postfix = ""
         if use_ema:
@@ -411,7 +411,8 @@ def log_preview(model, vae, args, epoch, class_id_to_name=None):
         cls_name = class_id_to_name.get(lbl, '') if class_id_to_name else ''
         caption  = f"class {lbl}: {cls_name}" if cls_name else f"class {lbl}"
         log_images.append(wandb.Image(img_np, caption=caption))
-    wandb.log({"epoch": epoch, "preview": log_images})
+    if hasattr(args, 'run_name') and args.run_name is not None:
+        wandb.log({"epoch": epoch, "preview": log_images})
     
     
 @torch.no_grad()
@@ -501,4 +502,5 @@ def log_preview_half(model, vae, data_loader, args, epoch, class_id_to_name=None
         caption = f"class {lbl}: {cls_name}" if cls_name else f"class {lbl}"
         log_images.append(wandb.Image(img_np, caption=caption))
 
-    wandb.log({"epoch": epoch, "preview_half": log_images})
+    if hasattr(args, 'run_name') and args.run_name is not None:
+        wandb.log({"epoch": epoch, "preview_half": log_images})

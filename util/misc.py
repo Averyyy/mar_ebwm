@@ -168,7 +168,8 @@ class MetricLogger(object):
                 }
                 if "langevin_noise_std" in self.meters:
                     log_dict["langevin_noise_std"] = float(self.meters["langevin_noise_std"].value)
-                wandb.log(log_dict)
+                if wandb.run is not None:
+                    wandb.log(log_dict)
 
             i += 1
             end = time.time()
@@ -261,7 +262,7 @@ def init_distributed_mode(args):
     if is_main_process():
         if hasattr(args, 'run_name') and args.run_name is not None:
             wandb.init(
-                project="ebwm-mar",
+                project="energy-diffusion", # Jul.24: changed to a new project | prev: ebwm-mar
                 config=vars(args),
                 name=args.run_name,
             )

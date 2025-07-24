@@ -515,7 +515,7 @@ def main(args):
     loss_scaler = NativeScaler()
 
     # log grads/params to wandb once
-    if misc.is_main_process():
+    if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
         wandb.watch(model_without_ddp, log="all", log_freq=50)
 
     # resume training
@@ -610,7 +610,8 @@ def main(args):
                 print(f"[epoch {epoch}]  validation loss: {val_loss:.6f}")
                 if log_writer is not None:
                     log_writer.add_scalar('val_loss', val_loss, epoch)
-                wandb.log({"val_loss": val_loss}, step=epoch)
+                if hasattr(args, 'run_name') and args.run_name is not None:
+                    wandb.log({"val_loss": val_loss}, step=epoch)
 
 
         # online evaluation
