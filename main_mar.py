@@ -179,8 +179,12 @@ def get_args_parser():
                         help='[PureDiffusion] Use IRED-style energy diffusion mode')
     parser.add_argument('--use_innerloop_opt', action='store_true',
                         help='[PureDiffusion] Use inner loop optimization during energy diffusion sampling')
+    parser.add_argument('--always_accept_opt_steps', action='store_true',
+                        help='[PureDiffusion] When use_innerloop_opt=True, always accept optimization steps regardless of energy evaluation')
     parser.add_argument('--supervise_energy_landscape', action='store_true',
                         help='[PureDiffusion] Use IRED-style energy landscape supervision during training')
+    parser.add_argument('--wandb_log_mse_only', action='store_true',
+                        help='[PureDiffusion] When using pure_diffusion with supervise_energy_landscape, only log MSE loss to wandb (not total loss)')
     parser.add_argument('--langevin_noise_std', default=0.01, type=float, help='[EnergyMLP] Langevin dynamics noise standard deviation')
     
     parser.add_argument('--grad_accu', default=1, type=int,
@@ -435,6 +439,7 @@ def main(args):
                 num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
                 use_energy=args.use_energy,
                 use_innerloop_opt=args.use_innerloop_opt,
+                always_accept_opt_steps=args.always_accept_opt_steps,
                 supervise_energy_landscape=args.supervise_energy_landscape,
                 mcmc_step_size=args.mcmc_step_size,
             )
@@ -452,6 +457,7 @@ def main(args):
                 dit_model=getattr(args, 'dit_model', 'DiT-B/2'),
                 use_energy=args.use_energy,
                 use_innerloop_opt=args.use_innerloop_opt,
+                always_accept_opt_steps=args.always_accept_opt_steps,
                 supervise_energy_landscape=args.supervise_energy_landscape,
                 mcmc_step_size=args.mcmc_step_size,
             )

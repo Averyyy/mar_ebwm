@@ -38,7 +38,7 @@ def train_one_epoch(model, vae,
                     log_writer=None,
                     args=None):
     model.train(True)
-    metric_logger = misc.MetricLogger(delimiter="  ")
+    metric_logger = misc.MetricLogger(delimiter="  ", args=args)
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('mcmc_step_size', misc.SmoothedValue(window_size=1, fmt='{value:.4f}'))
     metric_logger.update(mcmc_step_size=0.0)
@@ -52,6 +52,7 @@ def train_one_epoch(model, vae,
         
     accum_steps = args.grad_accu 
     loss_sum = 0.0
+    wandb_loss_sum = 0.0
     batch_count = 0
     
     for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
@@ -74,11 +75,22 @@ def train_one_epoch(model, vae,
 
         # forward
         with torch.cuda.amp.autocast():
-            loss = model(x, labels)
-            loss = loss / accum_steps
+            # Handle wandb MSE-only logging for pure_diffusion with supervise_energy_landscape
+            if (args.model_type == "pure_diffusion" and 
+                hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only and
+                hasattr(args, 'supervise_energy_landscape') and args.supervise_energy_landscape):
+                loss_result = model(x, labels, return_loss_dict=True)
+                loss = loss_result['total_loss'] / accum_steps
+                wandb_loss = loss_result['mse_loss'] / accum_steps
+            else:
+                loss = model(x, labels)
+                loss = loss / accum_steps
+                wandb_loss = loss
 
         loss_value = loss.item()
+        wandb_loss_value = wandb_loss.item()
         loss_sum += loss_value * accum_steps #for logging
+        wandb_loss_sum += wandb_loss_value * accum_steps #for wandb logging
         batch_count += 1
 
         # disable loss nan check for now
@@ -101,6 +113,8 @@ def train_one_epoch(model, vae,
         update_ema(ema_params, model_params, rate=args.ema_rate)
 
         metric_logger.update(loss=loss_value * accum_steps)
+        # Add separate wandb loss metric for MSE-only logging
+        metric_logger.update(wandb_loss=wandb_loss_value * accum_steps)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
@@ -240,14 +254,39 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
             cuda=True,
             isc=True,
             fid=True,
-            kid=False,
-            prc=False,
+            kid=True,
+            prc=True,
             verbose=False,
         )
+        
+        # Extract all computed metrics
         fid = metrics_dict['frechet_inception_distance']
         inception_score = metrics_dict['inception_score_mean']
+        kid_mean = metrics_dict.get('kernel_inception_distance_mean', 0.0)
+        kid_std = metrics_dict.get('kernel_inception_distance_std', 0.0) 
+        precision = metrics_dict.get('precision', 0.0)
+        recall = metrics_dict.get('recall', 0.0)
+        
+        # Print comprehensive metrics
+        print(f"=== Evaluation Metrics ===")
+        print(f"FID: {fid:.4f}")
+        print(f"IS: {inception_score:.4f}")
+        print(f"KID: {kid_mean:.6f} ± {kid_std:.6f}")
+        print(f"Precision: {precision:.4f}")
+        print(f"Recall: {recall:.4f}")
+        print(f"=========================")
+        
+        # Log to wandb if available
         if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
-            wandb.log({"fid": fid, "inception_score": inception_score}, step=epoch)
+            wandb_metrics = {
+                "fid": fid,
+                "inception_score": inception_score,
+                "kid_mean": kid_mean,
+                "kid_std": kid_std,
+                "precision": precision,
+                "recall": recall
+            }
+            wandb.log(wandb_metrics, step=epoch)
         postfix = ""
         if use_ema:
            postfix = postfix + "_ema"
@@ -272,7 +311,7 @@ def cache_latents(vae,
     import torch
     import util.misc as misc
 
-    metric_logger = misc.MetricLogger(delimiter="  ")
+    metric_logger = misc.MetricLogger(delimiter="  ", args=args)
     header = 'Caching: '
     print_freq = 20
 

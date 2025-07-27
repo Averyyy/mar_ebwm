@@ -41,6 +41,7 @@ class PureDiffusion(nn.Module):
         # Energy mode
         use_energy=False,
         use_innerloop_opt=False,
+        always_accept_opt_steps=False,
         supervise_energy_landscape=False,
         mcmc_step_size=0.01,
         
@@ -56,6 +57,7 @@ class PureDiffusion(nn.Module):
         self.num_classes = class_num
         self.use_energy = use_energy
         self.use_innerloop_opt = use_innerloop_opt
+        self.always_accept_opt_steps = always_accept_opt_steps
         self.supervise_energy_landscape = supervise_energy_landscape
         
         # Learnable MCMC step size parameter (following DEBT pattern)
@@ -91,16 +93,17 @@ class PureDiffusion(nn.Module):
         )
         
     
-    def forward(self, x, labels):
+    def forward(self, x, labels, return_loss_dict=False):
         """
         Training forward pass. Compatible with MAR training pipeline.
         
         Args:
             x: VAE encoded latent tensor [B, C, H, W]
             labels: Class labels [B]
+            return_loss_dict: If True, return dict with separate loss components
         
         Returns:
-            Diffusion loss (or tuple with energy losses if supervise_energy_landscape=True)
+            Diffusion loss (or dict with loss components if return_loss_dict=True)
         """
         # Sample random timesteps
         bsz = x.shape[0]
@@ -157,7 +160,14 @@ class PureDiffusion(nn.Module):
             loss_scale = 0.5
             total_loss = loss_mse + loss_scale * loss_energy.unsqueeze(-1)
             
-            return total_loss.mean()
+            if return_loss_dict:
+                return {
+                    'total_loss': total_loss.mean(),
+                    'mse_loss': loss_mse.mean(),
+                    'energy_loss': loss_energy.mean()
+                }
+            else:
+                return total_loss.mean()
         else:
             # Standard diffusion training
             loss = self.diffusion.training_losses(
@@ -203,13 +213,14 @@ class PureDiffusion(nn.Module):
                 max_val = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1) * 2.0
                 x_new = torch.clamp(x_new, -max_val, max_val)
                 
-                # Check if energy decreased, if not, reject the step
-                energy_new = self.dit(x_new, t, labels, return_energy=True)
-                bad_step = (energy_new > energy).squeeze()
-                
-                # Keep old values where energy increased
-                if bad_step.any():
-                    x_new[bad_step] = x_opt[bad_step]
+                # Check if energy decreased, if not, reject the step (unless always_accept_opt_steps is True)
+                if not (self.use_innerloop_opt and self.always_accept_opt_steps):
+                    energy_new = self.dit(x_new, t, labels, return_energy=True)
+                    bad_step = (energy_new > energy).squeeze()
+                    
+                    # Keep old values where energy increased
+                    if bad_step.any():
+                        x_new[bad_step] = x_opt[bad_step]
                 
                 x_opt = x_new.detach().requires_grad_(True)
         
