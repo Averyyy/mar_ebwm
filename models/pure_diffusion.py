@@ -28,15 +28,18 @@ class PureDiffusion(nn.Module):
         # Diffusion parameters
         num_diffusion_timesteps=1000,
         beta_schedule="linear",
-        beta_start=0.0001,
-        beta_end=0.02,
-        model_mean_type=ModelMeanType.EPSILON,
-        model_var_type=ModelVarType.FIXED_SMALL,
-        loss_type=LossType.MSE,
+        # beta_start=0.0001,
+        # beta_end=0.02,
+        # model_mean_type=ModelMeanType.EPSILON,
+        # model_var_type=ModelVarType.FIXED_SMALL,
+        # loss_type=LossType.MSE,
         
         # Class conditioning
         class_num=1000,
         class_dropout_prob=0.1,
+        
+        # Sampling parameters
+        num_sampling_steps=250,
         
         # Energy mode
         use_energy=False,
@@ -52,6 +55,7 @@ class PureDiffusion(nn.Module):
         
         # Store configuration
         self.img_size = img_size
+        self.num_sampling_steps = num_sampling_steps
         self.vae_stride = vae_stride
         self.vae_embed_dim = vae_embed_dim
         self.num_classes = class_num
@@ -80,16 +84,21 @@ class PureDiffusion(nn.Module):
         else:
             raise ValueError(f"Unknown DiT model: {dit_model}")
         
-        # Initialize diffusion process
-        betas = get_named_beta_schedule(beta_schedule, num_diffusion_timesteps)
-        if beta_schedule == "linear":
-            betas = np.linspace(beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64)
-            
-        self.diffusion = GaussianDiffusion(
-            betas=betas,
-            model_mean_type=model_mean_type,
-            model_var_type=model_var_type,
-            loss_type=loss_type,
+        from diffusion import create_diffusion
+        self.train_diffusion = create_diffusion(
+            timestep_respacing="",  # Full timesteps during training
+            noise_schedule=beta_schedule,
+            sigma_small=True,
+            learn_sigma=False,
+            diffusion_steps=num_diffusion_timesteps,
+        )
+        
+        self.gen_diffusion = create_diffusion(
+            timestep_respacing=str(num_sampling_steps),
+            noise_schedule=beta_schedule,
+            sigma_small=True,
+            learn_sigma=False,
+            diffusion_steps=num_diffusion_timesteps,
         )
         
     
@@ -107,22 +116,22 @@ class PureDiffusion(nn.Module):
         """
         # Sample random timesteps
         bsz = x.shape[0]
-        t = torch.randint(0, self.diffusion.num_timesteps, (bsz,), device=x.device)
+        t = torch.randint(0, self.train_diffusion.num_timesteps, (bsz,), device=x.device)
         
         if self.supervise_energy_landscape and self.use_energy:
             # Add noise to create noisy version
             noise = torch.randn_like(x)
-            # x_noisy = self.diffusion.q_sample(x_start=x, t=t, noise=noise)
+            # x_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
             
             # Generate negative samples through energy optimization
             x_neg_start = x + 3.0 * torch.randn_like(x)  # Start from perturbed version
-            x_neg_noisy = self.diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
+            x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
             
             # Optimize negative samples using energy landscape with learnable alpha
             x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2)
             
             # Predict x0 from optimized negative samples
-            alpha_cumprod = torch.from_numpy(self.diffusion.alphas_cumprod).float().to(t.device)[t]
+            alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
             sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
             sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
             
@@ -131,8 +140,8 @@ class PureDiffusion(nn.Module):
             x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
             
             # Create new noisy versions for energy computation
-            x_pos_noisy = self.diffusion.q_sample(x_start=x, t=t, noise=noise)
-            x_neg_noisy_final = self.diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
+            x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
+            x_neg_noisy_final = self.train_diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
             
             # Compute energy for both positive and negative samples
             x_concat = torch.cat([x_pos_noisy, x_neg_noisy_final], dim=0)
@@ -148,7 +157,7 @@ class PureDiffusion(nn.Module):
             loss_energy = F.cross_entropy(-1 * energy_stack, target, reduction='none')
             
             # Compute standard diffusion loss
-            loss_dict = self.diffusion.training_losses(
+            loss_dict = self.train_diffusion.training_losses(
                 model=self.dit,
                 x_start=x,
                 t=t,
@@ -170,7 +179,7 @@ class PureDiffusion(nn.Module):
                 return total_loss.mean()
         else:
             # Standard diffusion training
-            loss = self.diffusion.training_losses(
+            loss = self.train_diffusion.training_losses(
                 model=self.dit,
                 x_start=x,
                 t=t,
@@ -209,7 +218,7 @@ class PureDiffusion(nn.Module):
                 
                 x_new = x_opt - alpha * gradients.float()
                 
-                alpha_cumprod = torch.from_numpy(self.diffusion.alphas_cumprod).float().to(t.device)[t]
+                alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
                 max_val = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1) * 2.0
                 x_new = torch.clamp(x_new, -max_val, max_val)
                 
@@ -237,14 +246,16 @@ class PureDiffusion(nn.Module):
         # Initialize with noise
         x = torch.randn(bsz, *shape, device=device)
         
-        timesteps = list(range(self.diffusion.num_timesteps))[::-1]
+        # Use gen_diffusion for energy-aware sampling too
+        timesteps = list(range(self.gen_diffusion.num_timesteps))[::-1]
         
-        for i, t_val in enumerate(timesteps):
+        from tqdm import tqdm
+        for i, t_val in enumerate(tqdm(timesteps, desc="Sampling", leave=False)):
             t = torch.full((bsz,), t_val, device=device, dtype=torch.long)
             
-            # Standard diffusion sampling step
+            # Standard diffusion sampling step using gen_diffusion
             with torch.no_grad():
-                out = self.diffusion.p_sample(
+                out = self.gen_diffusion.p_sample(
                     self.dit,
                     x,
                     t, 
@@ -301,7 +312,7 @@ class PureDiffusion(nn.Module):
             def cfg_model(x, t, **kwargs):
                 return self.dit.forward_with_cfg(x, t, kwargs.get("y"), cfg)
             
-            samples = self.diffusion.p_sample_loop(
+            samples = self.gen_diffusion.p_sample_loop(
                 model=cfg_model,
                 shape=shape,
                 clip_denoised=True,
@@ -320,7 +331,8 @@ class PureDiffusion(nn.Module):
                     progress=progress
                 )
             else:
-                samples = self.diffusion.p_sample_loop(
+                # Use gen_diffusion with reduced timesteps
+                samples = self.gen_diffusion.p_sample_loop(
                     model=self.dit,
                     shape=shape,
                     clip_denoised=True,

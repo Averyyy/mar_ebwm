@@ -36,7 +36,7 @@ def train_one_epoch(model, vae,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler,
                     log_writer=None,
-                    args=None):
+                    args=None, global_step=0):
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ", args=args)
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -55,7 +55,7 @@ def train_one_epoch(model, vae,
     wandb_loss_sum = 0.0
     batch_count = 0
     
-    for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header, global_step)):
 
         # we use a per iteration (instead of per epoch) lr scheduler
         lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
@@ -74,7 +74,7 @@ def train_one_epoch(model, vae,
             x = posterior.sample().mul_(0.2325)
 
         # forward
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast('cuda'):
             # Handle wandb MSE-only logging for pure_diffusion with supervise_energy_landscape
             if (args.model_type == "pure_diffusion" and 
                 hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only and
@@ -137,11 +137,11 @@ def train_one_epoch(model, vae,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
 
 
 def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log_writer=None, cfg=1.0,
-             use_ema=True):
+             use_ema=True, global_step=None):
     model_without_ddp.eval()
     num_steps = args.num_images // (batch_size * misc.get_world_size()) + 1
     save_folder = os.path.join(args.output_dir, "ariter{}-diffsteps{}-temp{}-{}cfg{}-image{}".format(args.num_iter,
@@ -172,6 +172,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
     class_num = args.class_num
     assert args.num_images % class_num == 0  # number of images per class must be the same
     class_label_gen_world = np.arange(0, class_num).repeat(args.num_images // class_num)
+    # Only use the exact number of images requested, no additional padding
     class_label_gen_world = np.hstack([class_label_gen_world, np.zeros(50000)])
     world_size = misc.get_world_size()
     local_rank = misc.get_rank()
@@ -192,7 +193,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         # generation
         with torch.no_grad():
             # with torch.cuda.amp.autocast():
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast('cuda', enabled=False):
                 sampled_tokens = model_without_ddp.sample_tokens(bsz=batch_size, num_iter=args.num_iter, cfg=cfg,
                                                                  cfg_schedule=args.cfg_schedule, labels=labels_gen,
                                                                  temperature=args.temperature)
@@ -242,38 +243,105 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
     # compute FID and IS
     if log_writer is not None:
         if args.img_size == 256:
-            input2 = None
-            fid_statistics_file = 'fid_stats/adm_in256_stats.npz'
+            # Check if we should use FID stats regardless of eval_real_dataset
+            if hasattr(args, 'use_fid_stats') and args.use_fid_stats:
+                # Force use of precomputed FID stats for FID, but still use real dataset for KID/PRC if available
+                fid_statistics_file = 'fid_stats/adm_in256_stats.npz'
+                if (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
+                    os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
+                    input2 = args.eval_real_dataset
+                    print(f"Using FID stats file for FID and real dataset for KID/PRC: {args.eval_real_dataset}")
+                else:
+                    input2 = None
+                    print("Using FID stats file for FID calculation")
+            elif (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
+                  os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
+                # Use real dataset for all metrics
+                input2 = args.eval_real_dataset
+                fid_statistics_file = None
+                print(f"Using real dataset for all metrics: {args.eval_real_dataset}")
+            else:
+                # Fallback to precomputed stats
+                input2 = None
+                fid_statistics_file = 'fid_stats/adm_in256_stats.npz'
+                if hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None:
+                    print(f"Warning: eval_real_dataset path {args.eval_real_dataset} is invalid, falling back to precomputed stats")
         else:
-            # raise NotImplementedError
-            pass
-        metrics_dict = torch_fidelity.calculate_metrics(
-            input1=save_folder,
-            input2=input2,
-            fid_statistics_file=fid_statistics_file,
-            cuda=True,
-            isc=True,
-            fid=True,
-            kid=True,
-            prc=True,
-            verbose=False,
-        )
+            # For non-256 images, only use real dataset (no precomputed stats available)
+            if (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
+                os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
+                input2 = args.eval_real_dataset
+                fid_statistics_file = None
+                print(f"Using real dataset for evaluation: {args.eval_real_dataset}")
+            else:
+                print("No valid reference dataset provided. Skipping FID/KID/PRC calculation.")
+                input2 = None
+                fid_statistics_file = None
+        # Enable KID and PRC only when input2 is available
+        enable_kid = input2 is not None
+        enable_prc = input2 is not None
         
-        # Extract all computed metrics
-        fid = metrics_dict['frechet_inception_distance']
-        inception_score = metrics_dict['inception_score_mean']
-        kid_mean = metrics_dict.get('kernel_inception_distance_mean', 0.0)
-        kid_std = metrics_dict.get('kernel_inception_distance_std', 0.0) 
-        precision = metrics_dict.get('precision', 0.0)
-        recall = metrics_dict.get('recall', 0.0)
+        # Check if we can compute any metrics
+        if input2 is None and fid_statistics_file is None:
+            # No reference data available, set default values
+            fid = 0.0
+            inception_score = 0.0
+            kid_mean = 0.0
+            kid_std = 0.0
+            precision = 0.0
+            recall = 0.0
+            print("Skipping metrics calculation - no reference data available")
+        else:
+            # Build metrics calculation arguments
+            # Set KID subset size to accommodate small datasets
+            if args.kid_subset_size is not None:
+                kid_subset_size = args.kid_subset_size
+            else:
+                # Auto-select based on the smallest dataset size
+                kid_subset_size = min(args.num_images - 1, 1000)  # Default subset size
+            
+            metrics_kwargs = {
+                'input1': save_folder,
+                'cuda': True,
+                'isc': True,
+                'fid': True,
+                'kid': enable_kid,
+                'prc': enable_prc,
+                'verbose': False,
+                'samples_find_deep': True,  # Enable recursive search for images in subdirectories
+                'samples_resize_and_crop': args.img_size,  # Resize all images to same size
+                'kid_subset_size': kid_subset_size,  # Set subset size for KID calculation
+            }
+            
+            # Only add input2 and fid_statistics_file if they exist
+            if input2 is not None:
+                metrics_kwargs['input2'] = input2
+            if fid_statistics_file is not None:
+                metrics_kwargs['fid_statistics_file'] = fid_statistics_file
+                
+            metrics_dict = torch_fidelity.calculate_metrics(**metrics_kwargs)
+        
+            # Extract all computed metrics
+            fid = metrics_dict['frechet_inception_distance']
+            inception_score = metrics_dict['inception_score_mean']
+            kid_mean = metrics_dict.get('kernel_inception_distance_mean', 0.0)
+            kid_std = metrics_dict.get('kernel_inception_distance_std', 0.0) 
+            precision = metrics_dict.get('precision', 0.0)
+            recall = metrics_dict.get('recall', 0.0)
         
         # Print comprehensive metrics
         print(f"=== Evaluation Metrics ===")
         print(f"FID: {fid:.4f}")
         print(f"IS: {inception_score:.4f}")
-        print(f"KID: {kid_mean:.6f} ± {kid_std:.6f}")
-        print(f"Precision: {precision:.4f}")
-        print(f"Recall: {recall:.4f}")
+        if enable_kid:
+            print(f"KID: {kid_mean:.6f} ± {kid_std:.6f}")
+        else:
+            print(f"KID: N/A (no reference dataset)")
+        if enable_prc:
+            print(f"Precision: {precision:.4f}")
+            print(f"Recall: {recall:.4f}")
+        else:
+            print(f"Precision/Recall: N/A (no reference dataset)")
         print(f"=========================")
         
         # Log to wandb if available
@@ -286,7 +354,8 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
                 "precision": precision,
                 "recall": recall
             }
-            wandb.log(wandb_metrics, step=epoch)
+            step = global_step if global_step is not None else epoch
+            wandb.log(wandb_metrics, step=step)
         postfix = ""
         if use_ema:
            postfix = postfix + "_ema"
@@ -455,22 +524,43 @@ def log_preview(model, vae, args, epoch, class_id_to_name=None):
     
     
 @torch.no_grad()
-def validate_one_epoch(model, vae, data_loader, device):
+def validate_one_epoch(model, vae, data_loader, device, return_loss_dict=False):
     model.eval()
-    loss_sum, n_samples = 0.0, 0
-    for imgs, labels in data_loader:
+    loss_sum, mse_loss_sum, n_samples = 0.0, 0.0, 0
+    from tqdm import tqdm
+    for imgs, labels in tqdm(data_loader, desc="Validating", leave=False):
         imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
 
         posterior = vae.encode(imgs)
         latents   = posterior.sample().mul_(0.2325)
 
-        loss = model(latents, labels)
-        bs   = imgs.size(0)
-        loss_sum += loss.item() * bs
+        # Check if model supports returning loss dict (for energy models)
+        if hasattr(model, 'use_energy') and model.use_energy and hasattr(model, 'supervise_energy_landscape') and model.supervise_energy_landscape:
+            loss_dict = model(latents, labels, return_loss_dict=True)
+            if isinstance(loss_dict, dict):
+                total_loss = loss_dict['total_loss']
+                mse_loss = loss_dict['mse_loss']
+            else:
+                # Fallback if return_loss_dict is not supported
+                total_loss = loss_dict
+                mse_loss = total_loss
+        else:
+            loss = model(latents, labels)
+            total_loss = loss
+            mse_loss = loss
+        
+        bs = imgs.size(0)
+        loss_sum += total_loss.item() * bs
+        mse_loss_sum += mse_loss.item() * bs
         n_samples += bs
 
-    avg_loss = misc.all_reduce_mean(loss_sum) / misc.all_reduce_mean(n_samples)
-    return avg_loss
+    avg_total_loss = misc.all_reduce_mean(loss_sum) / misc.all_reduce_mean(float(n_samples))
+    avg_mse_loss = misc.all_reduce_mean(mse_loss_sum) / misc.all_reduce_mean(float(n_samples))
+    
+    if return_loss_dict:
+        return {'total_loss': avg_total_loss, 'mse_loss': avg_mse_loss}
+    else:
+        return avg_total_loss
 
 # --------------------------- DEBUG FUNCTION (FOR DEBT)---------------------------
 def log_preview_half(model, vae, data_loader, args, epoch, class_id_to_name=None):

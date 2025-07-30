@@ -8,4 +8,3 @@
 #SBATCH --mem-per-cpu=2G
 #SBATCH --cpus-per-task=72
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=4

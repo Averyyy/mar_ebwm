@@ -118,7 +118,7 @@ class MetricLogger(object):
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
-    def log_every(self, iterable, print_freq, header=None):
+    def log_every(self, iterable, print_freq, header=None, global_step=0):
         i = 0
         if not header:
             header = ''
@@ -195,7 +195,7 @@ class MetricLogger(object):
                 if "langevin_noise_std" in self.meters:
                     log_dict["langevin_noise_std"] = float(self.meters["langevin_noise_std"].value)
                 if wandb.run is not None:
-                    wandb.log(log_dict)
+                    wandb.log(log_dict, step=global_step + i)
 
             i += 1
             end = time.time()

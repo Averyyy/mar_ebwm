@@ -68,6 +68,9 @@ def get_args_parser():
     parser.add_argument('--online_eval', action='store_true')
     parser.add_argument('--evaluate', action='store_true')
     parser.add_argument('--eval_bsz', type=int, default=64, help='generation batch size')
+    parser.add_argument('--eval_real_dataset', type=str, default=None, help='path to real dataset for KID and PRC metrics')
+    parser.add_argument('--kid_subset_size', type=int, default=None, help='KID subset size (default: auto-select based on dataset size)')
+    parser.add_argument('--use_fid_stats', action='store_true', help='use precomputed FID statistics file instead of real dataset for FID calculation')
 
     # Optimizer parameters
     parser.add_argument('--weight_decay', type=float, default=0.02,
@@ -100,7 +103,7 @@ def get_args_parser():
     # Diffusion Loss params
     parser.add_argument('--diffloss_d', type=int, default=12)
     parser.add_argument('--diffloss_w', type=int, default=1536)
-    parser.add_argument('--num_sampling_steps', type=str, default="100")
+    parser.add_argument('--num_sampling_steps', type=str, default="250")
     parser.add_argument('--diffusion_batch_mul', type=int, default=1)
     parser.add_argument('--temperature', default=1.0, type=float, help='diffusion loss sampling temperature')
 
@@ -206,13 +209,13 @@ def get_args_parser():
                         help='global torch seed so that the SAME noise is reused each epoch')
     
     parser.add_argument('--val_data_path',
-                        default='/work/nvme/belh/aqian1/imagenet-1k/val/images',
-                        type=str, help='path to ImageNet val/images')
+                        default='/work/nvme/belh/aqian1/imagenet-1k/val',
+                        type=str, help='path to ImageNet val')
     parser.add_argument('--val_batch_size', default=64, type=int)
     parser.add_argument('--val_freq',        default=1,  type=int,
                         help='validate every N epochs (1 = every epoch)')
     parser.add_argument('--val', action='store_true',
-                        help='disable validation completely')
+                        help='')
 
     # Debug: half sampling
     parser.add_argument('--test_half_sampling', action='store_true',
@@ -291,7 +294,6 @@ def main(args):
     if args.val:
         transform_val = transforms.Compose([
             transforms.Lambda(lambda im: center_crop_arr(im, args.img_size)),
-            transforms.Resize((args.effective_img_size, args.effective_img_size)),
             transforms.ToTensor(),
             transforms.Normalize([0.5,0.5,0.5], [0.5,0.5,0.5])
         ])
@@ -437,6 +439,7 @@ def main(args):
                 class_num=args.class_num,
                 class_dropout_prob=args.label_drop_prob,
                 num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
+                num_sampling_steps=int(args.num_sampling_steps),
                 use_energy=args.use_energy,
                 use_innerloop_opt=args.use_innerloop_opt,
                 always_accept_opt_steps=args.always_accept_opt_steps,
@@ -454,6 +457,7 @@ def main(args):
                 class_num=args.class_num,
                 class_dropout_prob=args.label_drop_prob,
                 num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
+                num_sampling_steps=int(args.num_sampling_steps),
                 dit_model=getattr(args, 'dit_model', 'DiT-B/2'),
                 use_energy=args.use_energy,
                 use_innerloop_opt=args.use_innerloop_opt,
@@ -578,17 +582,50 @@ def main(args):
     # training
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
+    global_step = 0
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
+            
+        # validation
+        if (args.val) and (epoch % args.val_freq == 0):
+            val_result = validate_one_epoch(
+                model_without_ddp, vae, data_loader_val, device, return_loss_dict=True
+            )
+            val_total_loss = val_result['total_loss']
+            val_mse_loss = val_result['mse_loss']
+            
+            if misc.is_main_process():
+                print(f"[epoch {epoch}]  validation loss: {val_total_loss:.6f}")
+                if log_writer is not None:
+                    log_writer.add_scalar('val_loss', val_total_loss, epoch)
+                    log_writer.add_scalar('val_mse_loss', val_mse_loss, epoch)
+                
+                if hasattr(args, 'run_name') and args.run_name is not None:
+                    # Log validation loss based on wandb_log_mse_only flag
+                    if hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only and hasattr(args, 'use_energy') and args.use_energy:
+                        wandb.log({"val_loss": val_mse_loss, "val_total_loss": val_total_loss}, step=global_step)
+                    else:
+                        wandb.log({"val_loss": val_total_loss}, step=global_step)
 
-        train_one_epoch(
+        # online evaluation
+        if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
+            torch.cuda.empty_cache()
+            evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
+                     cfg=1.0, use_ema=True, global_step=global_step)
+            if not (args.cfg == 1.0 or args.cfg == 0.0):
+                evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
+                         log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step)
+            torch.cuda.empty_cache()
+
+        train_stats, global_step = train_one_epoch(
             model, vae,
             model_params, ema_params,
             data_loader_train,
             optimizer, device, epoch, loss_scaler,
             log_writer=log_writer,
-            args=args
+            args=args,
+            global_step=global_step
         )
 
         # save checkpoint
@@ -606,29 +643,7 @@ def main(args):
             if do_preview:
                 print(f"Preview sampling at epoch {epoch}")
                 log_preview(model_without_ddp, vae, args, epoch, class_id_to_name)
-                
-        # validation
-        if (args.val) and (epoch % args.val_freq == 0):
-            val_loss = validate_one_epoch(
-                model_without_ddp, vae, data_loader_val, device
-            )
-            if misc.is_main_process():
-                print(f"[epoch {epoch}]  validation loss: {val_loss:.6f}")
-                if log_writer is not None:
-                    log_writer.add_scalar('val_loss', val_loss, epoch)
-                if hasattr(args, 'run_name') and args.run_name is not None:
-                    wandb.log({"val_loss": val_loss}, step=epoch)
-
-
-        # online evaluation
-        if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
-            torch.cuda.empty_cache()
-            evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
-                     cfg=1.0, use_ema=True)
-            if not (args.cfg == 1.0 or args.cfg == 0.0):
-                evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
-                         log_writer=log_writer, cfg=args.cfg, use_ema=True)
-            torch.cuda.empty_cache()
+            
 
         if misc.is_main_process() and log_writer is not None:
             log_writer.flush()
