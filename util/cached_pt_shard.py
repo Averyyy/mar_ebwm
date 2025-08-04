@@ -43,9 +43,20 @@ class CachedPTShard(Dataset):
         self._cache: Dict[int, Dict[str, torch.Tensor]] = {}
         self._lru: List[int] = []
         self._max_shards_in_ram = max_shards_in_ram
+        
+        # Preload first few shards to avoid cold start
+        self._preload_shards()
 
     def __len__(self):
         return self._cum_sizes[-1]
+
+    def _preload_shards(self):
+        """Preload first few shards to avoid cold start delay."""
+        num_preload = min(self._max_shards_in_ram, len(self.shard_paths))
+        print(f"Preloading {num_preload} shards to warm up cache...")
+        for i in range(num_preload):
+            self._get_shard(i)
+        print(f"Cache warmed up with {len(self._cache)} shards")
 
     def _get_shard(self, shard_idx: int) -> Dict[str, torch.Tensor]:
         """Return shard dict, loading it into RAM if necessary (simple LRU)."""

@@ -58,7 +58,7 @@ def get_args_parser():
     parser.add_argument('--cached_path', default='', help='path to cached latents')
     parser.add_argument('--cache_format', default='npz', choices=['npz', 'pt', 'ptshard'],
                         help='Format to save cached latents (npz for compressed, pt for uncompressed, ptshard for sharded pt)')
-    parser.add_argument('--cache_shard_size', default=20000, type=int,
+    parser.add_argument('--cache_shard_size', default=32, type=int,
                         help='Number of samples per shard when --cache_format ptshard')
 
     # Selective caching options

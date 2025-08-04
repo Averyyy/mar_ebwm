@@ -1,13 +1,8 @@
 import torch
 import torch.nn as nn
-import numpy as np
-import math
-from typing import Optional
 import torch.nn.functional as F
 
 from models.dit.dit import DiT, DiT_models
-from diffusion.gaussian_diffusion import GaussianDiffusion, get_named_beta_schedule, ModelMeanType, ModelVarType, LossType
-
 
 class PureDiffusion(nn.Module):
     """
@@ -28,11 +23,6 @@ class PureDiffusion(nn.Module):
         # Diffusion parameters
         num_diffusion_timesteps=1000,
         beta_schedule="linear",
-        # beta_start=0.0001,
-        # beta_end=0.02,
-        # model_mean_type=ModelMeanType.EPSILON,
-        # model_var_type=ModelVarType.FIXED_SMALL,
-        # loss_type=LossType.MSE,
         
         # Class conditioning
         class_num=1000,
@@ -47,6 +37,10 @@ class PureDiffusion(nn.Module):
         always_accept_opt_steps=False,
         supervise_energy_landscape=False,
         mcmc_step_size=0.01,
+        linear_then_mean=False,
+        contrasive_loss_scale=0.5,
+        log_energy_accept_rate=False,
+        learnable_mcmc_step_size=False,
         
         # Compatibility parameters
         **kwargs
@@ -63,12 +57,17 @@ class PureDiffusion(nn.Module):
         self.use_innerloop_opt = use_innerloop_opt
         self.always_accept_opt_steps = always_accept_opt_steps
         self.supervise_energy_landscape = supervise_energy_landscape
+        self.contrasive_loss_scale = contrasive_loss_scale
+        self.log_energy_accept_rate = log_energy_accept_rate
+        self.learnable_mcmc_step_size = learnable_mcmc_step_size
         
-        # Learnable MCMC step size parameter (following DEBT pattern)
-        self.alpha = nn.Parameter(torch.tensor(float(mcmc_step_size)), requires_grad=True)
+        # Create alpha parameter - learnable if specified, otherwise fixed
+        if learnable_mcmc_step_size:
+            self.alpha = nn.Parameter(torch.tensor(float(mcmc_step_size)), requires_grad=True)
+        else:
+            self.register_buffer('alpha', torch.tensor(float(mcmc_step_size)))
         
         # Initialize DiT model
-        # Convert latent tokens to spatial format for DiT
         latent_size = img_size // vae_stride  # Size of latent space
         dit_kwargs = {
             'input_size': latent_size,
@@ -77,6 +76,7 @@ class PureDiffusion(nn.Module):
             'class_dropout_prob': class_dropout_prob,
             'learn_sigma': False,
             'use_energy': use_energy,
+            'linear_then_mean': linear_then_mean,
         }
         
         if dit_model in DiT_models:
@@ -128,7 +128,7 @@ class PureDiffusion(nn.Module):
             x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
             
             # Optimize negative samples using energy landscape with learnable alpha
-            x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2)
+            x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2, keep_grad=True)
             
             # Predict x0 from optimized negative samples
             alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
@@ -166,8 +166,7 @@ class PureDiffusion(nn.Module):
             loss_mse = loss_dict["loss"]
             
             # Combine losses with energy supervision
-            loss_scale = 0.5
-            total_loss = loss_mse + loss_scale * loss_energy.unsqueeze(-1)
+            total_loss = loss_mse + self.contrasive_loss_scale * loss_energy.unsqueeze(-1)
             
             if return_loss_dict:
                 return {
@@ -188,7 +187,7 @@ class PureDiffusion(nn.Module):
             
             return loss["loss"].mean()
     
-    def opt_step(self, x, t, labels, step=5, step_size=None):
+    def opt_step(self, x, t, labels, step=5, step_size=None, keep_grad=False):
         """
         Optimization step for energy diffusion following IRED approach.
         Performs gradient descent on energy landscape to refine samples.
@@ -199,15 +198,23 @@ class PureDiffusion(nn.Module):
             labels: Class labels [B]
             step: Number of optimization steps
             step_size: Step size for gradient descent (if None, uses learnable alpha)
+            keep_grad: If True, preserve gradients for alpha learning (used during training)
         
         Returns:
-            Optimized sample
+            If log_energy_accept_rate and not keep_grad: (optimized_sample, accept_count, total_count)
+            Otherwise: optimized_sample
         """
         if not self.use_energy:
             return x
             
         # Use learnable alpha parameter, clamped to prevent instability (following DEBT pattern)
         alpha = torch.clamp(self.alpha, min=1e-4) if step_size is None else step_size
+        
+        # Initialize accept rate tracking if enabled and not during training
+        total_accept_count = 0
+        total_step_count = 0
+        if self.log_energy_accept_rate and not keep_grad:
+            batch_size = x.shape[0]
             
         with torch.enable_grad():
             x_opt = x.clone().requires_grad_(True)
@@ -215,7 +222,7 @@ class PureDiffusion(nn.Module):
             for i in range(step):
                 # Get energy and gradients
                 energy, gradients = self.dit(x_opt, t, labels, return_both=True)
-                
+                #TODO: Greedy refinement?
                 x_new = x_opt - alpha * gradients.float()
                 
                 alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
@@ -227,13 +234,30 @@ class PureDiffusion(nn.Module):
                     energy_new = self.dit(x_new, t, labels, return_energy=True)
                     bad_step = (energy_new > energy).squeeze()
                     
+                    # Track accept rate if enabled and not during training
+                    if self.log_energy_accept_rate and not keep_grad:
+                        accept_count = (~bad_step).sum().item()
+                        total_count = bad_step.numel()
+                        total_accept_count += accept_count
+                        total_step_count += total_count
+                    
                     # Keep old values where energy increased
                     if bad_step.any():
                         x_new[bad_step] = x_opt[bad_step]
                 
-                x_opt = x_new.detach().requires_grad_(True)
+                if keep_grad:
+                    x_opt = x_new
+                else:
+                    x_opt = x_new.detach().requires_grad_(True)
         
-        return x_opt.detach()
+        # Keep gradients for alpha learning during training, detach during sampling
+        result = x_opt if keep_grad else x_opt.detach()
+        
+        # Return accept rate data if logging enabled and not during training
+        if self.log_energy_accept_rate and not keep_grad:
+            return result, total_accept_count, total_step_count
+        else:
+            return result
     
     def energy_aware_p_sample_loop(self, shape, labels, progress=False):
         """
@@ -245,6 +269,10 @@ class PureDiffusion(nn.Module):
         
         # Initialize with noise
         x = torch.randn(bsz, *shape, device=device)
+        
+        # Initialize accept rate tracking
+        total_accept_count = 0
+        total_step_count = 0
         
         # Use gen_diffusion for energy-aware sampling too
         timesteps = list(range(self.gen_diffusion.num_timesteps))[::-1]
@@ -265,7 +293,32 @@ class PureDiffusion(nn.Module):
             
             if self.use_energy and self.use_innerloop_opt:
                 opt_steps = 5 if t_val > 1 else 2
-                x = self.opt_step(x, t, labels, step=opt_steps)
+                
+                if self.log_energy_accept_rate:
+                    x, accept_count, step_count = self.opt_step(x, t, labels, step=opt_steps)
+                    total_accept_count += accept_count
+                    total_step_count += step_count
+                else:
+                    x = self.opt_step(x, t, labels, step=opt_steps)
+        
+        # Log overall accept rates after sampling completes
+        if self.log_energy_accept_rate and total_step_count > 0:
+            accept_rate_percent = (total_accept_count / total_step_count) * 100
+            avg_accepted_per_pic = total_accept_count // bsz if bsz > 0 else 0
+            total_steps_per_pic = total_step_count // bsz if bsz > 0 else 0
+            print(f"Energy diffusion accept rate: {avg_accepted_per_pic}/{total_steps_per_pic} steps ({accept_rate_percent:.1f}%) across {bsz} pictures")
+            
+            # Log to wandb if available and run_name is set
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log({
+                        "energy_accept_rate": accept_rate_percent,
+                        # "energy_accepted_steps": avg_accepted_per_pic,
+                        # "energy_total_steps": total_steps_per_pic
+                    })
+            except (ImportError, AttributeError):
+                pass  # wandb not available or not initialized
                 
         return x
     

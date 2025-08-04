@@ -206,7 +206,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
             gen_img_cnt += batch_size
             print("Generating {} images takes {:.5f} seconds, {:.5f} sec per image".format(gen_img_cnt, used_time, used_time / gen_img_cnt))
 
-        torch.distributed.barrier()
+        # torch.distributed.barrier()
         sampled_images = sampled_images.detach().cpu()
         sampled_images = (sampled_images + 1) / 2
         # print("sampled_images shape:", sampled_images.shape)
@@ -242,41 +242,38 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
 
     # compute FID and IS
     if log_writer is not None:
-        if args.img_size == 256:
-            # Check if we should use FID stats regardless of eval_real_dataset
-            if hasattr(args, 'use_fid_stats') and args.use_fid_stats:
-                # Force use of precomputed FID stats for FID, but still use real dataset for KID/PRC if available
-                fid_statistics_file = 'fid_stats/adm_in256_stats.npz'
-                if (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
-                    os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
-                    input2 = args.eval_real_dataset
-                    print(f"Using FID stats file for FID and real dataset for KID/PRC: {args.eval_real_dataset}")
-                else:
-                    input2 = None
-                    print("Using FID stats file for FID calculation")
-            elif (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
-                  os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
-                # Use real dataset for all metrics
-                input2 = args.eval_real_dataset
-                fid_statistics_file = None
-                print(f"Using real dataset for all metrics: {args.eval_real_dataset}")
-            else:
-                # Fallback to precomputed stats
-                input2 = None
-                fid_statistics_file = 'fid_stats/adm_in256_stats.npz'
-                if hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None:
-                    print(f"Warning: eval_real_dataset path {args.eval_real_dataset} is invalid, falling back to precomputed stats")
-        else:
-            # For non-256 images, only use real dataset (no precomputed stats available)
+        # Check if we should use FID stats file (for any image size)
+        fid_stats_file_path = getattr(args, 'fid_stats_file', 'fid_stats/adm_in256_stats.npz')
+        use_fid_stats = getattr(args, 'use_fid_stats', False)
+        
+        if use_fid_stats and os.path.exists(fid_stats_file_path):
+            # Force use of precomputed FID stats for FID, but still use real dataset for KID/PRC if available
+            fid_statistics_file = fid_stats_file_path
             if (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
                 os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
                 input2 = args.eval_real_dataset
-                fid_statistics_file = None
-                print(f"Using real dataset for evaluation: {args.eval_real_dataset}")
+                print(f"Using FID stats file {fid_stats_file_path} for FID and real dataset for KID/PRC: {args.eval_real_dataset}")
             else:
-                print("No valid reference dataset provided. Skipping FID/KID/PRC calculation.")
                 input2 = None
-                fid_statistics_file = None
+                print(f"Using FID stats file {fid_stats_file_path} for FID calculation")
+        elif (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
+              os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
+            # Use real dataset for all metrics
+            input2 = args.eval_real_dataset
+            fid_statistics_file = None
+            print(f"Using real dataset for all metrics: {args.eval_real_dataset}")
+        elif os.path.exists(fid_stats_file_path):
+            # Fallback to precomputed stats if available
+            input2 = None
+            fid_statistics_file = fid_stats_file_path
+            print(f"Using fallback FID stats file: {fid_stats_file_path}")
+            if hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None:
+                print(f"Warning: eval_real_dataset path {args.eval_real_dataset} is invalid, falling back to FID stats")
+        else:
+            # No reference data available
+            print("No valid reference dataset or FID stats file provided. Skipping FID/KID/PRC calculation.")
+            input2 = None
+            fid_statistics_file = None
         # Enable KID and PRC only when input2 is available
         enable_kid = input2 is not None
         enable_prc = input2 is not None
@@ -398,7 +395,7 @@ def cache_latents(vae,
     shard_buffer_m = []
     shard_buffer_f = []
     shard_buffer_lbl = []
-    shard_id = 0
+    shard_id = misc.get_rank() * 10000
 
     # Parse selected classes for caching
     selected_class_set = None

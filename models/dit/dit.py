@@ -131,8 +131,9 @@ class EnergyLayer(nn.Module):
     """
     Energy layer that outputs a scalar energy value.
     """
-    def __init__(self, input_dim):
+    def __init__(self, input_dim, linear_then_mean=False):
         super().__init__()
+        self.linear_then_mean = linear_then_mean
         self.energy_head = nn.Sequential(
             nn.Linear(input_dim, input_dim // 2),
             nn.SiLU(),
@@ -141,9 +142,14 @@ class EnergyLayer(nn.Module):
     
     def forward(self, x):
         # x: (N, T, D) -> energy: (N, 1)
-        # Global average pooling over sequence dimension, then map to scalar
-        x_pooled = x.mean(dim=1)  # (N, D)
-        energy = self.energy_head(x_pooled)  # (N, 1)
+        if self.linear_then_mean:
+            # Apply linear layers first, then mean
+            x_transformed = self.energy_head(x)  # (N, T, 1)
+            energy = x_transformed.mean(dim=1)   # (N, 1)
+        else:
+            # Original: mean first, then linear layers
+            x_pooled = x.mean(dim=1)  # (N, D)
+            energy = self.energy_head(x_pooled)  # (N, 1)
         return energy
 
 
@@ -184,6 +190,7 @@ class DiT(nn.Module):
         num_classes=1000,
         learn_sigma=True,
         use_energy=False,
+        linear_then_mean=False,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -208,7 +215,7 @@ class DiT(nn.Module):
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         if use_energy:
-            self.energy_layer = EnergyLayer(hidden_size)
+            self.energy_layer = EnergyLayer(hidden_size, linear_then_mean=linear_then_mean)
         self.initialize_weights()
 
     def initialize_weights(self):

@@ -71,6 +71,7 @@ def get_args_parser():
     parser.add_argument('--eval_real_dataset', type=str, default=None, help='path to real dataset for KID and PRC metrics')
     parser.add_argument('--kid_subset_size', type=int, default=None, help='KID subset size (default: auto-select based on dataset size)')
     parser.add_argument('--use_fid_stats', action='store_true', help='use precomputed FID statistics file instead of real dataset for FID calculation')
+    parser.add_argument('--fid_stats_file', type=str, default='fid_stats/adm_in256_stats.npz', help='path to precomputed FID statistics file')
 
     # Optimizer parameters
     parser.add_argument('--weight_decay', type=float, default=0.02,
@@ -83,7 +84,7 @@ def get_args_parser():
                         help='base learning rate: absolute_lr = base_lr * total_batch_size / 256')
     parser.add_argument('--min_lr', type=float, default=0., metavar='LR',
                         help='lower lr bound for cyclic schedulers that hit 0')
-    parser.add_argument('--lr_schedule', type=str, default='constant',
+    parser.add_argument('--lr_schedule', type=str, default='cosine',
                         help='learning rate schedule')
     parser.add_argument('--warmup_epochs', type=int, default=100, metavar='N',
                         help='epochs to warmup LR')
@@ -118,7 +119,7 @@ def get_args_parser():
                         help='path where to tensorboard log')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
-    parser.add_argument('--seed', default=1, type=int)
+    parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--resume', default='',
                         help='resume from checkpoint')
 
@@ -147,15 +148,17 @@ def get_args_parser():
                         help='Format of cached latents (npz or pt or ptshard)')
     
     # model selection
-    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion', 'energy_diffusion', 'pure_diffusion'],
-                         help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED, 'energy_diffusion' for energy-based diffusion, 'pure_diffusion' for pure diffusion)")
+    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion', 'pure_diffusion'],
+                         help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED, 'pure_diffusion' for pure diffusion (use --use_energy for energy-based diffusion)")
     # ---------------- Energy Diffusion args (re-added) ----------------
     parser.add_argument('--dit_model', type=str, default=None, help='[EnergyDiffusion] DiT model size, e.g. DiT-B/4. Overrides embed_dim, depth, num_heads')
     parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='[EnergyDiffusion] Number of diffusion timesteps')
     parser.add_argument('--energy_loss_weight', default=0.1, type=float, help='[EnergyDiffusion] Energy loss weight')
+    parser.add_argument('--contrasive_loss_scale', default=0.5, type=float, help='[EnergyDiffusion] Contrastive loss scale for energy supervision')
+    parser.add_argument('--linear_then_mean', action='store_true', help='[EnergyDiffusion] If set, EnergyLayer applies linear layers first then mean pooling')
 
     # DDiT-specific parameters (only used if --model_type ddit is specified)
-    parser.add_argument('--run_name', default='ddit', help='name of the run for logging')
+    parser.add_argument('--run_name', default=None, help='name of the run for logging. If not specified, wandb logging is disabled')
     parser.add_argument('--embed_dim', default=1024, type=int,
                         help='[DDiT] Embedding dimension')
     parser.add_argument('--depth', default=16, type=int,
@@ -188,13 +191,17 @@ def get_args_parser():
                         help='[PureDiffusion] Use IRED-style energy landscape supervision during training')
     parser.add_argument('--wandb_log_mse_only', action='store_true',
                         help='[PureDiffusion] When using pure_diffusion with supervise_energy_landscape, only log MSE loss to wandb (not total loss)')
+    parser.add_argument('--log_energy_accept_rate', action='store_true',
+                        help='[PureDiffusion] Log accept rate during opt_step in energy diffusion sampling for each picture')
+    parser.add_argument('--learnable_mcmc_step_size', action='store_true',
+                        help='[PureDiffusion] Make MCMC step size (alpha) a learnable parameter instead of fixed')
     parser.add_argument('--langevin_noise_std', default=0.01, type=float, help='[EnergyMLP] Langevin dynamics noise standard deviation')
     
     parser.add_argument('--grad_accu', default=1, type=int,
                     help='Number of gradient accumulation steps')
     
-    parser.add_argument('--mcmc_step_size_lr_multiplier', default=1, type=float,
-                    help='Learning rate multiplier for MCMC step size of energymlp')
+    parser.add_argument('--mcmc_step_size_lr_multiplier', default=None, type=float,
+                    help='Learning rate multiplier for MCMC step size of energymlp (defaults to 3*mcmc_step_size)')
     
     # preview sampling parameters
     parser.add_argument('--preview', action='store_true',
@@ -246,6 +253,9 @@ def main(args):
 
     num_tasks = misc.get_world_size()
     global_rank = misc.get_rank()
+    
+    total_num_workers = args.num_workers * num_tasks
+    print(f"total_num_workers: {total_num_workers}")
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -286,9 +296,10 @@ def main(args):
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=args.batch_size,
-        num_workers=args.num_workers,
+        num_workers=total_num_workers,
         pin_memory=args.pin_mem,
-        drop_last=True,
+        drop_last=False,
+        persistent_workers=True,
     )
     
     if args.val:
@@ -309,9 +320,11 @@ def main(args):
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
             batch_size=args.val_batch_size,
-            num_workers=args.num_workers,
+            num_workers=total_num_workers,
             pin_memory=args.pin_mem,
             drop_last=False,
+            persistent_workers=True,
+            prefetch_factor=8,
         )
     else:
         data_loader_val = None
@@ -395,38 +408,6 @@ def main(args):
                 class_num=args.class_num,
                 diffusion_timesteps=getattr(args, 'diffusion_timesteps', 10),
             )
-    elif args.model_type == "energy_diffusion":
-        from models.energy_diffusion import EnergyDiffusion
-        from models.dit.dit_energy import DiT, DiT_models
- 
-        if args.dit_model and args.dit_model in DiT_models:
-            dit_energy_model = DiT_models[args.dit_model](
-                seq_len=(args.img_size // args.vae_stride // args.patch_size)**2,
-                in_dim=args.vae_embed_dim * args.patch_size**2,
-                class_dropout_prob=args.label_drop_prob,
-                num_classes=args.class_num,
-            )
-        else:
-            dit_energy_model = DiT(
-                seq_len=(args.img_size // args.vae_stride // args.patch_size)**2,
-                in_dim=args.vae_embed_dim * args.patch_size**2,
-                hidden_size=args.embed_dim,
-                depth=args.depth,
-                num_heads=args.num_heads,
-                mlp_ratio=args.mlp_ratio,
-                class_dropout_prob=args.label_drop_prob,
-                num_classes=args.class_num,
-            )
- 
-        model = EnergyDiffusion(
-            dit_energy_model,
-            image_size=args.img_size,
-            vae_stride=args.vae_stride,
-            patch_size=args.patch_size,
-            timesteps=args.diffusion_timesteps,
-            sampling_timesteps=int(args.num_sampling_steps),
-            energy_loss_weight=args.energy_loss_weight,
-            )
     elif args.model_type == "pure_diffusion":
         from models import pure_diffusion
         # Check if args.model specifies a pure diffusion variant
@@ -445,6 +426,9 @@ def main(args):
                 always_accept_opt_steps=args.always_accept_opt_steps,
                 supervise_energy_landscape=args.supervise_energy_landscape,
                 mcmc_step_size=args.mcmc_step_size,
+                linear_then_mean=args.linear_then_mean,
+                log_energy_accept_rate=args.log_energy_accept_rate,
+                learnable_mcmc_step_size=args.learnable_mcmc_step_size,
             )
         else:
             # Fallback to default pure diffusion model 
@@ -464,6 +448,10 @@ def main(args):
                 always_accept_opt_steps=args.always_accept_opt_steps,
                 supervise_energy_landscape=args.supervise_energy_landscape,
                 mcmc_step_size=args.mcmc_step_size,
+                linear_then_mean=args.linear_then_mean,
+                log_energy_accept_rate=args.log_energy_accept_rate,
+                learnable_mcmc_step_size=args.learnable_mcmc_step_size,
+                contrasive_loss_scale=args.contrasive_loss_scale,
             )
     else:
         from models import mar
@@ -656,6 +644,11 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
+    
+    # Set default mcmc_step_size_lr_multiplier to 3 times mcmc_step_size if not specified
+    if args.mcmc_step_size_lr_multiplier is None:
+        args.mcmc_step_size_lr_multiplier = 3 * args.mcmc_step_size
+    
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     args.log_dir = args.output_dir
     main(args)

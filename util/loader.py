@@ -1,8 +1,12 @@
 import os
 import numpy as np
+from PIL import Image, ImageFile
 
 import torch
 import torchvision.datasets as datasets
+
+# Enable loading of truncated images
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class ImageFolderWithFilename(datasets.ImageFolder):
@@ -15,7 +19,20 @@ class ImageFolderWithFilename(datasets.ImageFolder):
             tuple: (sample, target, filename).
         """
         path, target = self.samples[index]
-        sample = self.loader(path)
+        
+        # Handle corrupted images by skipping them
+        try:
+            sample = self.loader(path)
+            # Force convert to RGB to handle various formats
+            if sample.mode != 'RGB':
+                sample = sample.convert('RGB')
+        except (ValueError, OSError, IOError, Image.DecompressionBombError) as e:
+            print(f"[Warning] Corrupted image {path}, error: {e}. Skipping and trying next image.")
+            
+            # Try next image in dataset
+            index = (index + 1) % len(self.samples)
+            return self.__getitem__(index)
+        
         if self.transform is not None:
             sample = self.transform(sample)
         if self.target_transform is not None:
