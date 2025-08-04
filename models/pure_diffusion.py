@@ -128,7 +128,7 @@ class PureDiffusion(nn.Module):
             x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
             
             # Optimize negative samples using energy landscape with learnable alpha
-            x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2, keep_grad=True)
+            x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2, keep_grad=True, mode='ascent')
             
             # Predict x0 from optimized negative samples
             alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
@@ -187,18 +187,19 @@ class PureDiffusion(nn.Module):
             
             return loss["loss"].mean()
     
-    def opt_step(self, x, t, labels, step=5, step_size=None, keep_grad=False):
+    def opt_step(self, x, t, labels, step=5, step_size=None, keep_grad=False, mode='descent'):
         """
         Optimization step for energy diffusion following IRED approach.
-        Performs gradient descent on energy landscape to refine samples.
+        Performs gradient descent or ascent on energy landscape.
         
         Args:
             x: Current sample [B, C, H, W]
             t: Timestep [B]
             labels: Class labels [B]
             step: Number of optimization steps
-            step_size: Step size for gradient descent (if None, uses learnable alpha)
+            step_size: Step size for gradient optimization (if None, uses learnable alpha)
             keep_grad: If True, preserve gradients for alpha learning (used during training)
+            mode: 'descent' for gradient descent, 'ascent' for gradient ascent
         
         Returns:
             If log_energy_accept_rate and not keep_grad: (optimized_sample, accept_count, total_count)
@@ -223,7 +224,10 @@ class PureDiffusion(nn.Module):
                 # Get energy and gradients
                 energy, gradients = self.dit(x_opt, t, labels, return_both=True)
                 #TODO: Greedy refinement?
-                x_new = x_opt - alpha * gradients.float()
+                if mode == 'ascent':
+                    x_new = x_opt + alpha * gradients.float()  # Gradient ascent for training
+                else:
+                    x_new = x_opt - alpha * gradients.float()  # Gradient descent for inference
                 
                 alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
                 max_val = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1) * 2.0
