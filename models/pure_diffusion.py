@@ -134,7 +134,7 @@ class PureDiffusion(nn.Module):
                 x_neg_pure_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
                 
                 # 3. Negative samples after energy descent (should be better than pure negative)
-                x_neg_descent = self.opt_step(x_neg_pure_noisy.detach(), t, labels, step=2, keep_grad=True, mode='descent')
+                x_neg_descent = self.opt_step(x_neg_pure_noisy.detach(), t, labels, step=None, keep_grad=True)
                 # Predict x0 and re-noise for fair comparison
                 alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
                 sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
@@ -144,7 +144,7 @@ class PureDiffusion(nn.Module):
                 x_neg_descent_noisy = self.train_diffusion.q_sample(x_start=x_neg_descent_pred, t=t, noise=noise)
                 
                 # 4. Negative samples after energy ascent (should have highest energy)
-                x_neg_ascent = self.opt_step(x_neg_pure_noisy.detach(), t, labels, step=2, keep_grad=True, mode='ascent')
+                x_neg_ascent = self.opt_step(x_neg_pure_noisy.detach(), t, labels, step=None, keep_grad=True, mode='ascent')
                 # Predict x0 and re-noise for fair comparison
                 x_neg_ascent_pred = (x_neg_ascent - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_ascent)) / sqrt_alpha_cumprod
                 x_neg_ascent_pred = torch.clamp(x_neg_ascent_pred, -2, 2)
@@ -179,7 +179,7 @@ class PureDiffusion(nn.Module):
                 x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
                 
                 # Optimize negative samples using energy landscape with learnable alpha
-                x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2, keep_grad=True, mode='descent')
+                x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=None, keep_grad=True)
                 
                 # Predict x0 from optimized negative samples
                 alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
@@ -238,7 +238,32 @@ class PureDiffusion(nn.Module):
             
             return loss["loss"].mean()
     
-    def opt_step(self, x, t, labels, step=5, step_size=None, keep_grad=False, mode='descent'):
+    def get_adaptive_steps(self, t, keep_grad=False, base_steps=None):
+        """
+        Calculate adaptive number of optimization steps based on timestep and context.
+        
+        Args:
+            t: Timestep tensor [B]
+            keep_grad: If True (training), use fewer steps for efficiency
+            base_steps: Override base step count
+            
+        Returns:
+            Number of optimization steps (int)
+        """
+        if base_steps is None:
+            if keep_grad:  # Training time - keep efficient
+                base_steps = 2
+            else:  # Inference time - be more thorough
+                base_steps = 5
+        
+        # Timestep adaptation: more steps needed for higher timesteps (more noise)
+        t_normalized = t.float().mean() / self.train_diffusion.num_timesteps
+        timestep_factor = 1.0 + 2.0 * t_normalized  # 1.0 to 3.0 range
+        
+        adaptive_steps = int(base_steps * timestep_factor)
+        return max(1, min(adaptive_steps, 10))  # Clamp between 1 and 10
+
+    def opt_step(self, x, t, labels, step=None, step_size=None, keep_grad=False, mode='descent'):
         """
         Optimization step for energy diffusion following IRED approach.
         Performs gradient descent or ascent on energy landscape.
@@ -258,6 +283,10 @@ class PureDiffusion(nn.Module):
         """
         if not self.use_energy:
             return x
+        
+        # Calculate adaptive steps if not provided
+        if step is None:
+            step = self.get_adaptive_steps(t, keep_grad)
             
         # Use learnable alpha parameter, clamped to prevent instability (following DEBT pattern)
         alpha = torch.clamp(self.alpha, min=1e-4) if step_size is None else step_size
@@ -347,14 +376,13 @@ class PureDiffusion(nn.Module):
                 x = out["sample"]
             
             if self.use_energy and self.use_innerloop_opt:
-                opt_steps = 5 if t_val > 1 else 2
-                
+                # Use adaptive steps - automatically adjusts based on timestep and inference context
                 if self.log_energy_accept_rate:
-                    x, accept_count, step_count = self.opt_step(x, t, labels, step=opt_steps)
+                    x, accept_count, step_count = self.opt_step(x, t, labels, step=None)
                     total_accept_count += accept_count
                     total_step_count += step_count
                 else:
-                    x = self.opt_step(x, t, labels, step=opt_steps)
+                    x = self.opt_step(x, t, labels, step=None)
         
         # Log overall accept rates after sampling completes
         if self.log_energy_accept_rate and total_step_count > 0:
