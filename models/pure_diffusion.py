@@ -41,6 +41,7 @@ class PureDiffusion(nn.Module):
         contrasive_loss_scale=0.5,
         log_energy_accept_rate=False,
         learnable_mcmc_step_size=False,
+        enhanced_contrastive_loss=False,
         
         # Compatibility parameters
         **kwargs
@@ -60,6 +61,7 @@ class PureDiffusion(nn.Module):
         self.contrasive_loss_scale = contrasive_loss_scale
         self.log_energy_accept_rate = log_energy_accept_rate
         self.learnable_mcmc_step_size = learnable_mcmc_step_size
+        self.enhanced_contrastive_loss = enhanced_contrastive_loss
         
         # Create alpha parameter - learnable if specified, otherwise fixed
         if learnable_mcmc_step_size:
@@ -121,40 +123,89 @@ class PureDiffusion(nn.Module):
         if self.supervise_energy_landscape and self.use_energy:
             # Add noise to create noisy version
             noise = torch.randn_like(x)
-            # x_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
             
-            # Generate negative samples through energy optimization
-            x_neg_start = x + 3.0 * torch.randn_like(x)  # Start from perturbed version
-            x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
-            
-            # Optimize negative samples using energy landscape with learnable alpha
-            x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2, keep_grad=True, mode='ascent')
-            
-            # Predict x0 from optimized negative samples
-            alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
-            sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
-            sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
-            
-            # Predict x0 from the optimized noisy sample (reverse of q_sample)
-            x_neg_pred = (x_neg_opt - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_opt)) / sqrt_alpha_cumprod
-            x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
-            
-            # Create new noisy versions for energy computation
-            x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
-            x_neg_noisy_final = self.train_diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
-            
-            # Compute energy for both positive and negative samples
-            x_concat = torch.cat([x_pos_noisy, x_neg_noisy_final], dim=0)
-            t_concat = torch.cat([t, t], dim=0)
-            labels_concat = torch.cat([labels, labels], dim=0)
-            
-            energy = self.dit(x_concat, t_concat, labels_concat, return_energy=True)
-            energy_pos, energy_neg = torch.chunk(energy, 2, dim=0)
-            
-            # Compute contrastive energy loss
-            energy_stack = torch.cat([energy_pos, energy_neg], dim=-1)
-            target = torch.zeros(energy_pos.size(0), device=energy_stack.device).long()
-            loss_energy = F.cross_entropy(-1 * energy_stack, target, reduction='none')
+            if self.enhanced_contrastive_loss:
+                # Enhanced 4-level contrastive loss
+                # 1. Positive samples (should have lowest energy)
+                x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
+                
+                # 2. Generate pure negative samples (random perturbation)
+                x_neg_start = x + 3.0 * torch.randn_like(x)  # Start from perturbed version
+                x_neg_pure_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
+                
+                # 3. Negative samples after energy descent (should be better than pure negative)
+                x_neg_descent = self.opt_step(x_neg_pure_noisy.detach(), t, labels, step=2, keep_grad=True, mode='descent')
+                # Predict x0 and re-noise for fair comparison
+                alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
+                sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
+                sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
+                x_neg_descent_pred = (x_neg_descent - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_descent)) / sqrt_alpha_cumprod
+                x_neg_descent_pred = torch.clamp(x_neg_descent_pred, -2, 2)
+                x_neg_descent_noisy = self.train_diffusion.q_sample(x_start=x_neg_descent_pred, t=t, noise=noise)
+                
+                # 4. Negative samples after energy ascent (should have highest energy)
+                x_neg_ascent = self.opt_step(x_neg_pure_noisy.detach(), t, labels, step=2, keep_grad=True, mode='ascent')
+                # Predict x0 and re-noise for fair comparison
+                x_neg_ascent_pred = (x_neg_ascent - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_ascent)) / sqrt_alpha_cumprod
+                x_neg_ascent_pred = torch.clamp(x_neg_ascent_pred, -2, 2)
+                x_neg_ascent_noisy = self.train_diffusion.q_sample(x_start=x_neg_ascent_pred, t=t, noise=noise)
+                
+                # Compute energy for all 4 types of samples
+                x_all = torch.cat([x_pos_noisy, x_neg_descent_noisy, x_neg_pure_noisy, x_neg_ascent_noisy], dim=0)
+                t_all = torch.cat([t, t, t, t], dim=0)
+                labels_all = torch.cat([labels, labels, labels, labels], dim=0)
+                
+                energy_all = self.dit(x_all, t_all, labels_all, return_energy=True)
+                energy_pos, energy_neg_descent, energy_neg_pure, energy_neg_ascent = torch.chunk(energy_all, 4, dim=0)
+                
+                # Ranking loss: energy_pos < energy_neg_descent < energy_neg_pure < energy_neg_ascent
+                # Use margin ranking loss for pairwise comparisons
+                margin = 1.0
+                loss_energy = 0.0
+                
+                # Pos < Neg+Descent
+                loss_energy += F.relu(energy_pos - energy_neg_descent + margin).mean()
+                # Neg+Descent < Neg Pure
+                loss_energy += F.relu(energy_neg_descent - energy_neg_pure + margin).mean()
+                # Neg Pure < Neg+Ascent
+                loss_energy += F.relu(energy_neg_pure - energy_neg_ascent + margin).mean()
+                # Direct: Pos < Neg+Ascent (strongest constraint)
+                loss_energy += F.relu(energy_pos - energy_neg_ascent + 2*margin).mean()
+                
+            else:
+                # Original 2-level contrastive loss
+                # Generate negative samples through energy optimization
+                x_neg_start = x + 3.0 * torch.randn_like(x)  # Start from perturbed version
+                x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
+                
+                # Optimize negative samples using energy landscape with learnable alpha
+                x_neg_opt = self.opt_step(x_neg_noisy, t, labels, step=2, keep_grad=True, mode='descent')
+                
+                # Predict x0 from optimized negative samples
+                alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
+                sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
+                sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
+                
+                # Predict x0 from the optimized noisy sample (reverse of q_sample)
+                x_neg_pred = (x_neg_opt - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_opt)) / sqrt_alpha_cumprod
+                x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
+                
+                # Create new noisy versions for energy computation
+                x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
+                x_neg_noisy_final = self.train_diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
+                
+                # Compute energy for both positive and negative samples
+                x_concat = torch.cat([x_pos_noisy, x_neg_noisy_final], dim=0)
+                t_concat = torch.cat([t, t], dim=0)
+                labels_concat = torch.cat([labels, labels], dim=0)
+                
+                energy = self.dit(x_concat, t_concat, labels_concat, return_energy=True)
+                energy_pos, energy_neg = torch.chunk(energy, 2, dim=0)
+                
+                # Compute contrastive energy loss
+                energy_stack = torch.cat([energy_pos, energy_neg], dim=-1)
+                target = torch.zeros(energy_pos.size(0), device=energy_stack.device).long()
+                loss_energy = F.cross_entropy(-1 * energy_stack, target, reduction='none')
             
             # Compute standard diffusion loss
             loss_dict = self.train_diffusion.training_losses(
