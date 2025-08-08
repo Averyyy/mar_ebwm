@@ -80,10 +80,9 @@ def train_one_epoch(model, vae,
 
         # forward
         with torch.amp.autocast('cuda'):
-            # Handle wandb MSE-only logging for pure_diffusion with supervise_energy_landscape
+            # Handle wandb MSE-only logging for pure_diffusion model
             if (args.model_type == "pure_diffusion" and 
-                hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only and
-                hasattr(args, 'supervise_energy_landscape') and args.supervise_energy_landscape):
+                hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
                 loss_result = model(x, labels, return_loss_dict=True)
                 loss = loss_result['total_loss'] / accum_steps
                 wandb_loss = loss_result['mse_loss'] / accum_steps

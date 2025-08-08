@@ -39,8 +39,8 @@ class PureDiffusion(nn.Module):
         learnable_mcmc_step_size=False,
         mcmc_step_size=0.01,
         linear_then_mean=False,
-        contrasive_loss_scale=0.5,
-        mcmc_refinement_loss_scale=1.0,
+        contrasive_loss_scale=0.05,
+        mcmc_refinement_loss_scale=0.1,
         log_energy_accept_rate=False,
         
         **kwargs
@@ -223,7 +223,7 @@ class PureDiffusion(nn.Module):
             model_kwargs={"y": labels}
         )
         loss_mse = loss_dict["loss"]
-        total_loss = loss_mse
+        total_loss = loss_mse.clone()
         
         # Optional loss components  
         if self.supervise_energy_landscape:

@@ -154,7 +154,7 @@ def get_args_parser():
     parser.add_argument('--dit_model', type=str, default=None, help='[EnergyDiffusion] DiT model size, e.g. DiT-B/4. Overrides embed_dim, depth, num_heads')
     parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='[EnergyDiffusion] Number of diffusion timesteps')
     parser.add_argument('--contrasive_loss_scale', default=0.05, type=float, help='[EnergyDiffusion] Contrastive loss scale for energy supervision')
-    parser.add_argument('--mcmc_refinement_loss_scale', default=0.5, type=float, help='[EnergyDiffusion] MCMC refinement loss scale for alpha learning')
+    parser.add_argument('--mcmc_refinement_loss_scale', default=0.1, type=float, help='[EnergyDiffusion] MCMC refinement loss scale for alpha learning')
     parser.add_argument('--linear_then_mean', action='store_true', help='[EnergyDiffusion] If set, EnergyLayer applies linear layers first then mean pooling')
 
     # DDiT-specific parameters (only used if --model_type ddit is specified)
@@ -430,6 +430,8 @@ def main(args):
                 linear_then_mean=args.linear_then_mean,
                 log_energy_accept_rate=args.log_energy_accept_rate,
                 learnable_mcmc_step_size=args.learnable_mcmc_step_size,
+                contrasive_loss_scale=args.contrasive_loss_scale,
+                mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
             )
         else:
             # Fallback to default pure diffusion model 
@@ -594,7 +596,7 @@ def main(args):
                 if hasattr(args, 'run_name') and args.run_name is not None:
                     # Log validation loss based on wandb_log_mse_only flag
                     if hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only and hasattr(args, 'use_energy') and args.use_energy:
-                        wandb.log({"val_loss": val_mse_loss, "val_total_loss": val_total_loss}, step=global_step)
+                        wandb.log({"val_loss": val_mse_loss}, step=global_step)
                     else:
                         wandb.log({"val_loss": val_total_loss}, step=global_step)
 

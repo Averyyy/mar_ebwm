@@ -1,6 +1,7 @@
 import builtins
 import datetime
 import os
+import sys
 import time
 from collections import defaultdict, deque
 from pathlib import Path
@@ -158,39 +159,27 @@ class MetricLogger(object):
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
             if is_main_process() and "loss" in self.meters:
-                # Determine which loss to use for wandb logging
-                use_wandb_loss = (self.args and 
-                                hasattr(self.args, 'model_type') and self.args.model_type == "pure_diffusion" and
-                                hasattr(self.args, 'wandb_log_mse_only') and self.args.wandb_log_mse_only and
-                                hasattr(self.args, 'supervise_energy_landscape') and self.args.supervise_energy_landscape and
-                                "wandb_loss" in self.meters)
+                # Determine which loss to use for wandb logging based on wandb_log_mse_only flag
+                use_mse_loss = (self.args and 
+                               hasattr(self.args, 'wandb_log_mse_only') and self.args.wandb_log_mse_only and
+                               "wandb_loss" in self.meters)
                 
-                if use_wandb_loss:
-                    # Log MSE loss as main "loss" and total loss separately
-                    wandb_loss_value = float(self.meters["wandb_loss"].value)
-                    total_loss_value = float(self.meters["loss"].value)
-                    
-                    log_dict = {
-                        "eta": float(eta_seconds),                    
-                        "loss": wandb_loss_value,   # MSE loss as main loss
-                        "total_loss": total_loss_value,  # Total loss (MSE + energy)
-                        "lr": float(self.meters["lr"].value),       
-                        "time": float(iter_time.value),  
-                        "data": float(data_time.value),             # or global_avg
-                        "max_mem": float(torch.cuda.max_memory_allocated() / MB),
-                        "mcmc step size": float(self.meters["mcmc_step_size"].value),
-                    }
+                if use_mse_loss:
+                    # Log MSE loss as main "loss" when wandb_log_mse_only is set
+                    loss_value = float(self.meters["wandb_loss"].value)
                 else:
-                    # Standard logging
-                    log_dict = {
-                        "eta": float(eta_seconds),                    
-                        "loss": float(self.meters["loss"].value),   
-                        "lr": float(self.meters["lr"].value),       
-                        "time": float(iter_time.value),  
-                        "data": float(data_time.value),             # or global_avg
-                        "max_mem": float(torch.cuda.max_memory_allocated() / MB),
-                        "mcmc step size": float(self.meters["mcmc_step_size"].value),
-                    }
+                    # Standard logging - use total loss
+                    loss_value = float(self.meters["loss"].value)
+                
+                log_dict = {
+                    "eta": float(eta_seconds),                    
+                    "loss": loss_value,
+                    "lr": float(self.meters["lr"].value),       
+                    "time": float(iter_time.value),  
+                    "data": float(data_time.value),
+                    "max_mem": float(torch.cuda.max_memory_allocated() / MB),
+                    "mcmc step size": float(self.meters["mcmc_step_size"].value),
+                }
                 
                 if "langevin_noise_std" in self.meters:
                     log_dict["langevin_noise_std"] = float(self.meters["langevin_noise_std"].value)
