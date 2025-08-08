@@ -41,7 +41,9 @@ def train_one_epoch(model, vae,
     metric_logger = misc.MetricLogger(delimiter="  ", args=args)
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('mcmc_step_size', misc.SmoothedValue(window_size=1, fmt='{value:.4f}'))
+    metric_logger.add_meter('iter_per_sec', misc.SmoothedValue(window_size=20, fmt='{value:.2f}'))
     metric_logger.update(mcmc_step_size=0.0)
+    metric_logger.update(iter_per_sec=0.0)  # Initialize to avoid division by zero
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -54,6 +56,9 @@ def train_one_epoch(model, vae,
     loss_sum = 0.0
     wandb_loss_sum = 0.0
     batch_count = 0
+    
+    # Track iterations per second
+    iter_start_time = time.time()
     
     for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header, global_step)):
 
@@ -108,7 +113,7 @@ def train_one_epoch(model, vae,
             loss_sum = 0.0
             batch_count = 0
 
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()  # Removed: causes GPU utilization drops
 
         update_ema(ema_params, model_params, rate=args.ema_rate)
 
@@ -116,13 +121,21 @@ def train_one_epoch(model, vae,
         # Add separate wandb loss metric for MSE-only logging
         metric_logger.update(wandb_loss=wandb_loss_value * accum_steps)
 
+        # Calculate iterations per second
+        current_time = time.time()
+        if data_iter_step > 0:  # Avoid division by zero on first iteration
+            elapsed_time = current_time - iter_start_time
+            if elapsed_time > 0:  # Additional safety check
+                iter_per_sec = (data_iter_step + 1) / elapsed_time
+                metric_logger.update(iter_per_sec=iter_per_sec)
+        
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
         if args.model_type == "debt":
             metric_logger.update(mcmc_step_size=model.module.alpha.item())
         elif hasattr(model.module, "use_energy_loss") and model.module.use_energy_loss:
             metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
-        elif args.model_type == "pure_diffusion" and hasattr(model.module, "alpha"):
+        elif args.model_type == "pure_diffusion" and hasattr(args, 'use_energy') and args.use_energy and hasattr(model.module, "alpha"):
             metric_logger.update(mcmc_step_size=model.module.alpha.item())
 
         loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
@@ -206,7 +219,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
             gen_img_cnt += batch_size
             print("Generating {} images takes {:.5f} seconds, {:.5f} sec per image".format(gen_img_cnt, used_time, used_time / gen_img_cnt))
 
-        # torch.distributed.barrier()
+        torch.distributed.barrier()
         sampled_images = sampled_images.detach().cpu()
         sampled_images = (sampled_images + 1) / 2
         # print("sampled_images shape:", sampled_images.shape)

@@ -153,9 +153,8 @@ def get_args_parser():
     # ---------------- Energy Diffusion args (re-added) ----------------
     parser.add_argument('--dit_model', type=str, default=None, help='[EnergyDiffusion] DiT model size, e.g. DiT-B/4. Overrides embed_dim, depth, num_heads')
     parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='[EnergyDiffusion] Number of diffusion timesteps')
-    parser.add_argument('--energy_loss_weight', default=0.1, type=float, help='[EnergyDiffusion] Energy loss weight')
-    parser.add_argument('--contrasive_loss_scale', default=0.5, type=float, help='[EnergyDiffusion] Contrastive loss scale for energy supervision')
-    parser.add_argument('--enhanced_contrastive_loss', action='store_true', help='[EnergyDiffusion] If set, uses 4-level ranking contrastive loss instead of 2-level')
+    parser.add_argument('--contrasive_loss_scale', default=0.05, type=float, help='[EnergyDiffusion] Contrastive loss scale for energy supervision')
+    parser.add_argument('--mcmc_refinement_loss_scale', default=0.5, type=float, help='[EnergyDiffusion] MCMC refinement loss scale for alpha learning')
     parser.add_argument('--linear_then_mean', action='store_true', help='[EnergyDiffusion] If set, EnergyLayer applies linear layers first then mean pooling')
 
     # DDiT-specific parameters (only used if --model_type ddit is specified)
@@ -301,6 +300,7 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=False,
         persistent_workers=True,
+        prefetch_factor=8,
     )
     
     if args.val:
@@ -453,7 +453,7 @@ def main(args):
                 log_energy_accept_rate=args.log_energy_accept_rate,
                 learnable_mcmc_step_size=args.learnable_mcmc_step_size,
                 contrasive_loss_scale=args.contrasive_loss_scale,
-                enhanced_contrastive_loss=args.enhanced_contrastive_loss,
+                mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
             )
     else:
         from models import mar
