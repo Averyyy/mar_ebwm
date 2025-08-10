@@ -195,6 +195,8 @@ def get_args_parser():
                         help='[PureDiffusion] Log accept rate during opt_step in energy diffusion sampling for each picture')
     parser.add_argument('--learnable_mcmc_step_size', action='store_true',
                         help='[PureDiffusion] Make MCMC step size (alpha) a learnable parameter instead of fixed')
+    parser.add_argument('--energy_grad_multiplier', default=1.0, type=float,
+                        help='[PureDiffusion] Multiplier for energy gradients used as diffusion score')
     parser.add_argument('--langevin_noise_std', default=0.01, type=float, help='[EnergyMLP] Langevin dynamics noise standard deviation')
     
     parser.add_argument('--grad_accu', default=1, type=int,
@@ -432,6 +434,7 @@ def main(args):
                 learnable_mcmc_step_size=args.learnable_mcmc_step_size,
                 contrasive_loss_scale=args.contrasive_loss_scale,
                 mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
+                energy_gradient_multiplier=args.energy_grad_multiplier,
             )
         else:
             # Fallback to default pure diffusion model 
@@ -456,6 +459,7 @@ def main(args):
                 learnable_mcmc_step_size=args.learnable_mcmc_step_size,
                 contrasive_loss_scale=args.contrasive_loss_scale,
                 mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
+                energy_gradient_multiplier=args.energy_grad_multiplier,
             )
     else:
         from models import mar

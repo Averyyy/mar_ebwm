@@ -191,10 +191,12 @@ class DiT(nn.Module):
         learn_sigma=True,
         use_energy=False,
         linear_then_mean=False,
+        energy_gradient_multiplier=1.0,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
         self.use_energy = use_energy
+        self.energy_gradient_multiplier = energy_gradient_multiplier
         self.in_channels = in_channels
         if use_energy:
             self.out_channels = 1  # Energy mode: output scalar energy per patch
@@ -305,6 +307,7 @@ class DiT(nn.Module):
                     return energy
                 else:
                     gradients = torch.autograd.grad(energy.sum(), x_in, create_graph=True)[0]
+                    gradients = self.energy_gradient_multiplier * gradients
                     return (energy, gradients) if return_both else gradients
         else:
             x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2

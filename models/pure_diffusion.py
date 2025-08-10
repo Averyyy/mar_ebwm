@@ -42,6 +42,7 @@ class PureDiffusion(nn.Module):
         contrasive_loss_scale=0.05,
         mcmc_refinement_loss_scale=0.1,
         log_energy_accept_rate=False,
+        energy_gradient_multiplier=1.0,
         
         **kwargs
     ):
@@ -78,6 +79,7 @@ class PureDiffusion(nn.Module):
             'learn_sigma': False,
             'use_energy': use_energy,
             'linear_then_mean': linear_then_mean,
+            'energy_gradient_multiplier': energy_gradient_multiplier,
         }
         
         if dit_model in DiT_models:
