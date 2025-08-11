@@ -235,6 +235,12 @@ def get_args_parser():
     parser.add_argument('--syn_dataset_len', default=1281167, type=int,
                         help='Number of synthetic samples to generate when using --syn_dataloader')
 
+    # Streaming processing arguments
+    parser.add_argument('--use_streaming', action='store_true',
+                        help='Enable streaming processing to overlap computation and data transfer for better GPU utilization')
+    parser.add_argument('--stream_buffer_size', default=2, type=int,
+                        help='Number of CUDA streams to use for streaming processing (default: 2)')
+
     return parser
 
 
@@ -520,11 +526,8 @@ def main(args):
     print(optimizer)
     loss_scaler = NativeScaler()
 
-    # log grads/params to wandb once
-    if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
-        wandb.watch(model_without_ddp, log="all", log_freq=50)
-
     # resume training
+    is_resuming_checkpoint = False
     if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
         # checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
         checkpoint = safe_load_ckpt(args.resume)
@@ -541,10 +544,18 @@ def main(args):
                 loss_scaler.load_state_dict(checkpoint['scaler'])
             print("With optim & sched!")
         del checkpoint
+        is_resuming_checkpoint = True
     else:
         model_params = list(model_without_ddp.parameters())
         ema_params = copy.deepcopy(model_params)
         print("Training from scratch")
+
+    # Initialize wandb after checkpoint loading
+    misc.init_wandb(args, is_resuming_checkpoint=is_resuming_checkpoint, resume_path=args.resume)
+
+    # log grads/params to wandb once (after wandb initialization)
+    if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
+        wandb.watch(model_without_ddp, log="all", log_freq=50)
 
     # evaluate FID and IS
     if args.evaluate:
@@ -578,7 +589,18 @@ def main(args):
     # training
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
+    
+    # Calculate global_step for wandb resume
     global_step = 0
+    if hasattr(args, '_wandb_run') and args._wandb_run is not None and args.start_epoch > 0:
+        # When resuming, calculate the global step based on the start epoch
+        # This ensures continuity with previous training steps
+        global_step = args.start_epoch * len(data_loader_train)
+        print(f"📈 Resuming training from global_step: {global_step} (calculated from epoch {args.start_epoch})")
+    elif args.start_epoch > 0:
+        # Fallback: calculate from start epoch even without wandb
+        global_step = args.start_epoch * len(data_loader_train)
+        print(f"📈 Starting from global_step: {global_step} (calculated from epoch {args.start_epoch})")
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)

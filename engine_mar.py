@@ -48,6 +48,15 @@ def train_one_epoch(model, vae,
     print_freq = 20
 
     optimizer.zero_grad()
+    
+    # Enable streaming processing if requested
+    use_streaming = getattr(args, 'use_streaming', False)
+    stream_buffer_size = getattr(args, 'stream_buffer_size', 2)
+    
+    if use_streaming:
+        # Create CUDA streams for overlapping computation and data transfer
+        streams = [torch.cuda.Stream() for _ in range(stream_buffer_size)]
+        print(f"Using streaming with {stream_buffer_size} streams for GPU utilization optimization")
 
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
@@ -59,6 +68,12 @@ def train_one_epoch(model, vae,
     
     # Track iterations per second
     iter_start_time = time.time()
+    
+    # Convert data_loader to iterator for streaming
+    if use_streaming:
+        return train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader, optimizer,
+                                       device, epoch, loss_scaler, log_writer, args, global_step,
+                                       streams, stream_buffer_size, metric_logger, header, print_freq)
     
     for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header, global_step)):
 
@@ -151,6 +166,197 @@ def train_one_epoch(model, vae,
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
 
+
+def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader, optimizer,
+                            device, epoch, loss_scaler, log_writer, args, global_step,
+                            streams, stream_buffer_size, metric_logger, header, print_freq):
+    """
+    Streaming version of train_one_epoch that overlaps data loading, VAE encoding, and model forward pass
+    using CUDA streams to increase GPU utilization.
+    """
+    accum_steps = args.grad_accu 
+    loss_sum = 0.0
+    wandb_loss_sum = 0.0
+    batch_count = 0
+    
+    # Track iterations per second
+    iter_start_time = time.time()
+    
+    # Pre-allocate buffers for streaming
+    stream_buffers = []
+    for _ in range(stream_buffer_size):
+        stream_buffers.append({
+            'samples': None,
+            'labels': None, 
+            'x': None,
+            'ready': False
+        })
+    
+    # Initialize data iterator
+    data_iter = iter(data_loader)
+    
+    # Pre-load initial batches into streams
+    for stream_idx in range(min(stream_buffer_size, len(data_loader))):
+        try:
+            samples, labels = next(data_iter)
+            with torch.cuda.stream(streams[stream_idx]):
+                # Async data transfer to GPU
+                samples_gpu = samples.to(device, non_blocking=True)
+                labels_gpu = labels.to(device, non_blocking=True)
+                
+                # Async VAE encoding
+                with torch.no_grad():
+                    if args.use_cached:
+                        moments = samples_gpu
+                        posterior = DiagonalGaussianDistribution(moments)
+                    else:
+                        posterior = vae.encode(samples_gpu)
+                    x = posterior.sample().mul_(0.2325)
+                
+                stream_buffers[stream_idx] = {
+                    'samples': samples_gpu,
+                    'labels': labels_gpu,
+                    'x': x,
+                    'ready': True
+                }
+        except StopIteration:
+            break
+    
+    # Main training loop with streaming
+    data_iter_step = 0
+    current_stream = 0
+    
+    while data_iter_step < len(data_loader):
+        # Wait for current stream to be ready
+        streams[current_stream].synchronize()
+        
+        if not stream_buffers[current_stream]['ready']:
+            break
+            
+        # Get processed data from current stream buffer
+        samples = stream_buffers[current_stream]['samples']
+        labels = stream_buffers[current_stream]['labels'] 
+        x = stream_buffers[current_stream]['x']
+        
+        # Start loading next batch in parallel
+        next_stream = (current_stream + 1) % stream_buffer_size
+        if data_iter_step + 1 < len(data_loader):
+            try:
+                next_samples, next_labels = next(data_iter)
+                with torch.cuda.stream(streams[next_stream]):
+                    # Async data transfer and VAE encoding for next batch
+                    next_samples_gpu = next_samples.to(device, non_blocking=True)
+                    next_labels_gpu = next_labels.to(device, non_blocking=True)
+                    
+                    with torch.no_grad():
+                        if args.use_cached:
+                            next_moments = next_samples_gpu
+                            next_posterior = DiagonalGaussianDistribution(next_moments)
+                        else:
+                            next_posterior = vae.encode(next_samples_gpu)
+                        next_x = next_posterior.sample().mul_(0.2325)
+                    
+                    stream_buffers[next_stream] = {
+                        'samples': next_samples_gpu,
+                        'labels': next_labels_gpu,
+                        'x': next_x,
+                        'ready': True
+                    }
+            except StopIteration:
+                stream_buffers[next_stream]['ready'] = False
+        
+        # Learning rate adjustment
+        lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
+        
+        # Forward pass with current batch
+        with torch.amp.autocast('cuda'):
+            # Handle wandb MSE-only logging for pure_diffusion model
+            if (args.model_type == "pure_diffusion" and 
+                hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
+                loss_result = model(x, labels, return_loss_dict=True)
+                loss = loss_result['total_loss'] / accum_steps
+                wandb_loss = loss_result['mse_loss'] / accum_steps
+            else:
+                loss = model(x, labels)
+                loss = loss / accum_steps
+                wandb_loss = loss
+
+        loss_value = loss.item()
+        wandb_loss_value = wandb_loss.item()
+        loss_sum += loss_value * accum_steps
+        wandb_loss_sum += wandb_loss_value * accum_steps
+        batch_count += 1
+
+        # Loss validation
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+            sys.exit(1)
+
+        # Backward pass
+        loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), 
+                   update_grad=False, do_backward=True)
+                   
+        if (data_iter_step + 1) % accum_steps == 0 or (data_iter_step + 1) == len(data_loader):
+            loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), 
+                       update_grad=True, do_backward=False)
+            optimizer.zero_grad()
+
+            avg_loss = loss_sum / batch_count
+            metric_logger.update(loss=avg_loss)
+            loss_sum = 0.0
+            batch_count = 0
+
+        # Update EMA parameters
+        update_ema(ema_params, model_params, rate=args.ema_rate)
+
+        # Update metrics
+        metric_logger.update(loss=loss_value * accum_steps)
+        metric_logger.update(wandb_loss=wandb_loss_value * accum_steps)
+
+        # Calculate iterations per second
+        current_time = time.time()
+        if data_iter_step > 0:
+            elapsed_time = current_time - iter_start_time
+            if elapsed_time > 0:
+                iter_per_sec = (data_iter_step + 1) / elapsed_time
+                metric_logger.update(iter_per_sec=iter_per_sec)
+        
+        lr = optimizer.param_groups[0]["lr"]
+        metric_logger.update(lr=lr)
+        
+        # Update MCMC step size metrics
+        if args.model_type == "debt":
+            metric_logger.update(mcmc_step_size=model.module.alpha.item())
+        elif hasattr(model.module, "use_energy_loss") and model.module.use_energy_loss:
+            metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
+        elif args.model_type == "pure_diffusion" and hasattr(args, 'use_energy') and args.use_energy and hasattr(model.module, "alpha"):
+            metric_logger.update(mcmc_step_size=model.module.alpha.item())
+
+        # Logging
+        loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
+        if log_writer is not None:
+            epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
+            log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('lr', lr, epoch_1000x)
+
+        # Use MetricLogger for consistent logging (including wandb)
+        if data_iter_step % print_freq == 0:
+            # Trigger MetricLogger's log_every behavior manually for streaming
+            metric_logger.log_every_step(data_iter_step, len(data_loader), header, global_step + data_iter_step)
+
+        # Mark current buffer as used and move to next stream
+        stream_buffers[current_stream]['ready'] = False
+        current_stream = next_stream
+        data_iter_step += 1
+
+    # Wait for all streams to complete
+    for stream in streams:
+        stream.synchronize()
+
+    # Gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger)
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
 
 def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log_writer=None, cfg=1.0,
              use_ema=True, global_step=None):

@@ -3,6 +3,8 @@ import datetime
 import os
 import sys
 import time
+import json
+import glob
 from collections import defaultdict, deque
 from pathlib import Path
 import wandb
@@ -240,6 +242,122 @@ def save_on_master(*args, **kwargs):
         torch.save(*args, **kwargs)
 
 
+def find_wandb_run_id_for_resume(resume_path, run_name):
+    """
+    Find wandb run ID from existing wandb logs that matches the output directory and run_name.
+    
+    Args:
+        resume_path: Path to the checkpoint directory being resumed from
+        run_name: The run name to match
+        
+    Returns:
+        str: wandb run ID if found, None otherwise
+    """
+    # Get the absolute path for comparison
+    resume_abs_path = os.path.abspath(resume_path)
+    
+    # Look for wandb directory in current working directory and parent directories
+    current_dir = os.getcwd()
+    wandb_dirs_to_check = [
+        os.path.join(current_dir, 'wandb'),
+        os.path.join(os.path.dirname(current_dir), 'wandb'),
+        os.path.join(resume_abs_path, 'wandb'),
+        os.path.join(os.path.dirname(resume_abs_path), 'wandb')
+    ]
+    
+    for wandb_base_dir in wandb_dirs_to_check:
+        if not os.path.exists(wandb_base_dir):
+            continue
+            
+        # Find all run directories
+        run_pattern = os.path.join(wandb_base_dir, "run-*-*")
+        run_dirs = glob.glob(run_pattern)
+        
+        for run_dir in run_dirs:
+            try:
+                metadata_file = os.path.join(run_dir, "files", "wandb-metadata.json")
+                if not os.path.exists(metadata_file):
+                    continue
+                    
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Check if this run matches our criteria
+                args_list = metadata.get('args', [])
+                
+                # Extract run_name from args
+                saved_run_name = None
+                output_dir = None
+                
+                for i, arg in enumerate(args_list):
+                    if arg == '--run_name' and i + 1 < len(args_list):
+                        saved_run_name = args_list[i + 1]
+                    elif arg == '--output_dir' and i + 1 < len(args_list):
+                        output_dir = args_list[i + 1]
+                
+                # Match by run_name and optionally by output_dir
+                run_name_match = (saved_run_name == run_name)
+                output_dir_match = True  # Default to True if no output_dir found
+                
+                if output_dir:
+                    output_abs_path = os.path.abspath(output_dir)
+                    output_dir_match = (output_abs_path == resume_abs_path)
+                
+                if run_name_match and output_dir_match:
+                    # Extract run ID from directory name (format: run-YYYYMMDD_HHMMSS-RUNID)
+                    dir_name = os.path.basename(run_dir)
+                    if dir_name.startswith('run-') and '-' in dir_name:
+                        parts = dir_name.split('-')
+                        if len(parts) >= 3:
+                            run_id = parts[-1]  # Last part is the run ID
+                            return run_id
+                            
+            except (json.JSONDecodeError, IOError, KeyError):
+                # Skip this run directory if we can't read it
+                continue
+    
+    return None
+
+
+def init_wandb(args, is_resuming_checkpoint=False, resume_path=None):
+    """
+    Initialize wandb with proper resume logic
+    
+    Args:
+        args: Arguments object
+        is_resuming_checkpoint: True if successfully loaded a checkpoint
+        resume_path: Path to the checkpoint being resumed from
+    """
+    if not is_main_process() or not hasattr(args, 'run_name') or args.run_name is None:
+        return None
+    
+    wandb_run_id = None
+    resume_mode = "allow"  # Default wandb resume mode
+    
+    if is_resuming_checkpoint and resume_path:
+        wandb_run_id = find_wandb_run_id_for_resume(resume_path, args.run_name)
+        if wandb_run_id:
+            print(f"🔄 Resuming wandb run ID: {wandb_run_id} from checkpoint: {resume_path}")
+            resume_mode = "allow"
+        else:
+            print(f"⚠️  No matching wandb run found for checkpoint resume from {resume_path}, creating new run")
+    else:
+        print(f"🆕 Creating new wandb run: {args.run_name}")
+    
+    run = wandb.init(
+        project="energy-diffusion", # Jul.24: changed to a new project | prev: ebwm-mar
+        config=vars(args),
+        name=args.run_name,
+        id=wandb_run_id,
+        resume=resume_mode
+    )
+    wandb.define_metric("preview", step_metric="epoch", summary="last")
+    
+    # Store the wandb run object for step synchronization
+    args._wandb_run = run
+    return run
+
+
 def init_distributed_mode(args):
     if args.dist_on_itp:
         args.rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
@@ -276,12 +394,8 @@ def init_distributed_mode(args):
     
     if is_main_process():
         if hasattr(args, 'run_name') and args.run_name is not None:
-            wandb.init(
-                project="energy-diffusion", # Jul.24: changed to a new project | prev: ebwm-mar
-                config=vars(args),
-                name=args.run_name,
-            )
-            wandb.define_metric("preview", step_metric="epoch", summary="last")
+            # Wandb initialization will be handled after checkpoint loading in main
+            pass
 
 
 class NativeScalerWithGradNormCount:
