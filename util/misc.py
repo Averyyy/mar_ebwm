@@ -160,33 +160,7 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
-            if is_main_process() and "loss" in self.meters:
-                # Determine which loss to use for wandb logging based on wandb_log_mse_only flag
-                use_mse_loss = (self.args and 
-                               hasattr(self.args, 'wandb_log_mse_only') and self.args.wandb_log_mse_only and
-                               "wandb_loss" in self.meters)
-                
-                if use_mse_loss:
-                    # Log MSE loss as main "loss" when wandb_log_mse_only is set
-                    loss_value = float(self.meters["wandb_loss"].value)
-                else:
-                    # Standard logging - use total loss
-                    loss_value = float(self.meters["loss"].value)
-                
-                log_dict = {
-                    "eta": float(eta_seconds),                    
-                    "loss": loss_value,
-                    "lr": float(self.meters["lr"].value),       
-                    "time": float(iter_time.value),  
-                    "data": float(data_time.value),
-                    "max_mem": float(torch.cuda.max_memory_allocated() / MB),
-                    "mcmc step size": float(self.meters["mcmc_step_size"].value),
-                }
-                
-                if "langevin_noise_std" in self.meters:
-                    log_dict["langevin_noise_std"] = float(self.meters["langevin_noise_std"].value)
-                if wandb.run is not None:
-                    wandb.log(log_dict, step=global_step + i)
+            self.log_wandb(eta_seconds, iter_time, data_time, global_step + i)
 
             i += 1
             end = time.time()
@@ -194,6 +168,42 @@ class MetricLogger(object):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {} ({:.4f} s / it)'.format(
             header, total_time_str, total_time / len(iterable)))
+
+    def log_wandb(self, eta_seconds, iter_time, data_time, step):
+        """Centralized wandb logging for both regular and streaming training"""
+        if is_main_process() and "loss" in self.meters:
+            # Determine which loss to use for wandb logging based on wandb_log_mse_only flag
+            use_mse_loss = (self.args and 
+                           hasattr(self.args, 'wandb_log_mse_only') and self.args.wandb_log_mse_only and
+                           "wandb_loss" in self.meters)
+            
+            if use_mse_loss:
+                # Log MSE loss as main "loss" when wandb_log_mse_only is set
+                loss_value = float(self.meters["wandb_loss"].value)
+            else:
+                # Standard logging - use total loss
+                loss_value = float(self.meters["loss"].value)
+            
+            MB = 1024.0 * 1024.0
+            log_dict = {
+                "eta": float(eta_seconds),                    
+                "loss": loss_value,
+                "lr": float(self.meters["lr"].value),       
+                "time": float(iter_time.value) if hasattr(iter_time, 'value') else float(iter_time),  
+                "data": float(data_time.value) if hasattr(data_time, 'value') else float(data_time),
+                "max_mem": float(torch.cuda.max_memory_allocated() / MB),
+                "mcmc step size": float(self.meters["mcmc_step_size"].value),
+            }
+            
+            if "langevin_noise_std" in self.meters:
+                log_dict["langevin_noise_std"] = float(self.meters["langevin_noise_std"].value)
+            
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log(log_dict, step=step)
+            except ImportError:
+                pass
 
 
 def setup_for_distributed(is_master):

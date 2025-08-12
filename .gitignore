@@ -10,3 +10,5 @@ slurm/job_configs/
 
 core
 .vscode/
+
+CLAUDE.md

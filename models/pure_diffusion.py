@@ -507,14 +507,14 @@ def pure_diffusion_small(**kwargs):
 
 def pure_diffusion_base(**kwargs):
     """Pure diffusion model with DiT-B backbone"""
-    return PureDiffusion(dit_model="DiT-B/2", **kwargs)
+    return PureDiffusion(dit_model="DiT-B/1", **kwargs)
 
 
 def pure_diffusion_large(**kwargs):
     """Pure diffusion model with DiT-L backbone"""
-    return PureDiffusion(dit_model="DiT-L/2", **kwargs)
+    return PureDiffusion(dit_model="DiT-L/1", **kwargs)
 
 
 def pure_diffusion_xlarge(**kwargs):
     """Pure diffusion model with DiT-XL backbone"""
-    return PureDiffusion(dit_model="DiT-XL/2", **kwargs)
+    return PureDiffusion(dit_model="DiT-XL/1", **kwargs)

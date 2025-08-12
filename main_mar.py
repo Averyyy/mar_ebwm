@@ -308,7 +308,7 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=False,
         persistent_workers=True,
-        prefetch_factor=8,
+        # prefetch_factor=8,
     )
     
     if args.val:
@@ -554,8 +554,8 @@ def main(args):
     misc.init_wandb(args, is_resuming_checkpoint=is_resuming_checkpoint, resume_path=args.resume)
 
     # log grads/params to wandb once (after wandb initialization)
-    if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
-        wandb.watch(model_without_ddp, log="all", log_freq=50)
+    # if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
+    #     wandb.watch(model_without_ddp, log="all", log_freq=50)
 
     # evaluate FID and IS
     if args.evaluate:

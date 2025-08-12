@@ -1,6 +1,7 @@
 import math
 import sys
 from typing import Iterable
+import datetime
 
 import torch
 
@@ -56,7 +57,9 @@ def train_one_epoch(model, vae,
     if use_streaming:
         # Create CUDA streams for overlapping computation and data transfer
         streams = [torch.cuda.Stream() for _ in range(stream_buffer_size)]
-        print(f"Using streaming with {stream_buffer_size} streams for GPU utilization optimization")
+        print(f"Using streaming with {stream_buffer_size} streams + async data loading (batch_size={args.batch_size}) for GPU utilization optimization")
+        if args.batch_size < 512:
+            print("⚠️  Warning: Streaming may be slower than sequential for small batch sizes. Consider batch_size >= 512 for best streaming performance.")
 
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
@@ -179,8 +182,9 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
     wandb_loss_sum = 0.0
     batch_count = 0
     
-    # Track iterations per second
+    # Track iterations per second and data loading time
     iter_start_time = time.time()
+    data_load_times = []  # Track individual batch data loading times
     
     # Pre-allocate buffers for streaming
     stream_buffers = []
@@ -198,7 +202,10 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
     # Pre-load initial batches into streams
     for stream_idx in range(min(stream_buffer_size, len(data_loader))):
         try:
+            # Time data loading
+            data_start_time = time.time()
             samples, labels = next(data_iter)
+            data_load_times.append(time.time() - data_start_time)
             with torch.cuda.stream(streams[stream_idx]):
                 # Async data transfer to GPU
                 samples_gpu = samples.to(device, non_blocking=True)
@@ -242,7 +249,12 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
         next_stream = (current_stream + 1) % stream_buffer_size
         if data_iter_step + 1 < len(data_loader):
             try:
+                # Time data loading for next batch
+                data_start_time = time.time()
                 next_samples, next_labels = next(data_iter)
+                data_load_times.append(time.time() - data_start_time)
+                
+                # Launch async processing on next stream without blocking
                 with torch.cuda.stream(streams[next_stream]):
                     # Async data transfer and VAE encoding for next batch
                     next_samples_gpu = next_samples.to(device, non_blocking=True)
@@ -256,6 +268,7 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
                             next_posterior = vae.encode(next_samples_gpu)
                         next_x = next_posterior.sample().mul_(0.2325)
                     
+                    # Mark as ready without blocking
                     stream_buffers[next_stream] = {
                         'samples': next_samples_gpu,
                         'labels': next_labels_gpu,
@@ -339,10 +352,38 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
             log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
-        # Use MetricLogger for consistent logging (including wandb)
+        # Log progress and wandb data (KISS: exact same format as log_every)
         if data_iter_step % print_freq == 0:
-            # Trigger MetricLogger's log_every behavior manually for streaming
-            metric_logger.log_every_step(data_iter_step, len(data_loader), header, global_step + data_iter_step)
+            # Calculate timing metrics like MetricLogger.log_every
+            elapsed_time = time.time() - iter_start_time
+            avg_iter_time = elapsed_time / (data_iter_step + 1) if data_iter_step > 0 else 0.0
+            eta_seconds = avg_iter_time * (len(data_loader) - data_iter_step - 1) if data_iter_step > 0 else 0.0
+            eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+            
+            # Calculate average data loading time
+            avg_data_time = sum(data_load_times) / len(data_load_times) if data_load_times else 0.0
+            
+            # Print in exact same format as MetricLogger.log_every
+            MB = 1024.0 * 1024.0
+            # Format the iteration number with proper spacing (like MetricLogger)
+            iter_str = f"[{data_iter_step:{len(str(len(data_loader)))}d}/{len(data_loader)}]"
+            
+            if torch.cuda.is_available():
+                print(f"{header}  {iter_str}  "
+                      f"eta: {eta_string}  "
+                      f"{str(metric_logger)}  "
+                      f"time: {avg_iter_time:.4f}  "
+                      f"data: {avg_data_time:.4f}  "
+                      f"max mem: {torch.cuda.max_memory_allocated() / MB:.0f}")
+            else:
+                print(f"{header}  {iter_str}  "
+                      f"eta: {eta_string}  "
+                      f"{str(metric_logger)}  "
+                      f"time: {avg_iter_time:.4f}  "
+                      f"data: {avg_data_time:.4f}")
+            
+            # Use centralized wandb logging (KISS principle)
+            metric_logger.log_wandb(eta_seconds, avg_iter_time, avg_data_time, global_step + data_iter_step)
 
         # Mark current buffer as used and move to next stream
         stream_buffers[current_stream]['ready'] = False
