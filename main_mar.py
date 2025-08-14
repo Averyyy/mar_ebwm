@@ -308,7 +308,7 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=False,
         persistent_workers=True,
-        # prefetch_factor=8,
+        prefetch_factor=4,
     )
     
     if args.val:

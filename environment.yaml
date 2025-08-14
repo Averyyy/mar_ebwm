@@ -1,4 +1,4 @@
-name: mar_gh200
+name: ebm_gh200
 channels:
   - conda-forge
   - https://repo.anaconda.com/pkgs/main

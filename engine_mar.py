@@ -468,9 +468,6 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         torch.distributed.barrier()
         sampled_images = sampled_images.detach().cpu()
         sampled_images = (sampled_images + 1) / 2
-        # print("sampled_images shape:", sampled_images.shape)
-        # print("sampled_images", sampled_images)
-        # print("min:", sampled_images.min().item(), "max:", sampled_images.max().item(), "mean:", sampled_images.mean().item())
         if torch.isnan(sampled_images).any() or torch.isinf(sampled_images).any():
             print("nan detacted!")
         
