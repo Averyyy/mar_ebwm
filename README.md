@@ -99,7 +99,7 @@ python demo/gradio_app.py
 
 ### Training
 
-## Overview for features:
+## Tips & explanations:
 A. Training pipeline:
   1. Wandb logging: 
     a. Install and login to wandb in your terminal, then in `util/misc.py`, in function init_wandb, set `project` param in `wandb.init` to `energy-diffusion`. 
@@ -141,6 +141,11 @@ B. Model (energy diffusion, EDM):
     5. `--learnable_mcmc_step_size`: To enable learnable mcmc step size by adding a refinement loss that punishes on energy acceptance during mcmc steps. This could improve performance by a little, but it is also very computationally expensive.
     6. `--log_energy_accept_rate`: To log the energy acceptance rate during training to wandb.
     7. `--wandb_log_mse_only`: To log only the mse loss to wandb so that we could compare with other model variants.
+    8. `--mcmc_num_steps`: To set the number of mcmc steps during sampling process. Otherwise it is adaptive steps during inference. (which may be slower)
+ C. Training:
+    1. When mentioning learning rate, the default meaning the base lr (blr), Real LR is calculated by a blr * eff_batch_size / 256
+    2. Effective batch size is calculated by batch_size * grad_accu * num_gpus. By enabling gradient accumulation, just specify `--grad_accu` to the number of gradient accumulation steps in your args.
+    3. If you are training on a very large batch size (not effective batch size), and getting bumps in GPU utilization between 0% to 100%, please try increasing the `--num_workers`. Eg. batchsize 1024 + `--num_workers 16` would be a good choice. Total number of workers are calculated by num_workers * num_gpus. However, if you are using a small batchsize like 128, then 8 workers per gpu is enough.
 
 
 
