@@ -152,7 +152,7 @@ B. Model (energy diffusion, EDM):
 
 Script for the default setting (EDM-Base, 500 diffusion steps, 80 epochs, 128 batchsize, 9e-6 blr):
 ```
-torchrun --nproc_per_node=1 --nnodes=2 --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
 main_mar.py \
   --run_name ${RUN_NAME} \
   --img_size 256 \
