@@ -6,8 +6,8 @@ output_dir/
 wandb/
 logs/
 
-slurm/
-slurm/job_configs/
+# slurm/
+# slurm/job_configs/
 
 core
 .vscode/

@@ -37,7 +37,7 @@ def train_one_epoch(model, vae,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler,
                     log_writer=None,
-                    args=None, global_step=0):
+                    args=None, global_step=0, train_dtype=torch.bfloat16):
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ", args=args)
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -74,14 +74,19 @@ def train_one_epoch(model, vae,
     
     # Convert data_loader to iterator for streaming
     if use_streaming:
-        return train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader, optimizer,
-                                       device, epoch, loss_scaler, log_writer, args, global_step,
-                                       streams, stream_buffer_size, metric_logger, header, print_freq)
+        print("⚠️  Streaming mode not fully implemented yet, falling back to normal mode")
+        # return train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader, optimizer,
+        #                                device, epoch, loss_scaler, log_writer, args, global_step,
+        #                                streams, stream_buffer_size, metric_logger, header, print_freq)
     
     for data_iter_step, (samples, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header, global_step)):
 
+        # Calculate effective step (accounts for gradient accumulation)
+        effective_step = data_iter_step // accum_steps
+        effective_steps_per_epoch = len(data_loader) // accum_steps
+        
         # we use a per iteration (instead of per epoch) lr scheduler
-        lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
+        lr_sched.adjust_learning_rate(optimizer, effective_step / effective_steps_per_epoch + epoch, args)
 
         samples = samples.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
@@ -97,7 +102,7 @@ def train_one_epoch(model, vae,
             x = posterior.sample().mul_(0.2325)
 
         # forward
-        with torch.amp.autocast('cuda'):
+        with torch.amp.autocast('cuda', dtype=train_dtype):
             # Handle wandb MSE-only logging for pure_diffusion model
             if (args.model_type == "pure_diffusion" and 
                 hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
@@ -138,12 +143,12 @@ def train_one_epoch(model, vae,
         # Add separate wandb loss metric for MSE-only logging
         metric_logger.update(wandb_loss=wandb_loss_value * accum_steps)
 
-        # Calculate iterations per second
+        # Calculate iterations per second (using effective steps)
         current_time = time.time()
-        if data_iter_step > 0:  # Avoid division by zero on first iteration
+        if effective_step > 0:  # Avoid division by zero on first iteration
             elapsed_time = current_time - iter_start_time
             if elapsed_time > 0:  # Additional safety check
-                iter_per_sec = (data_iter_step + 1) / elapsed_time
+                iter_per_sec = (effective_step + 1) / elapsed_time
                 metric_logger.update(iter_per_sec=iter_per_sec)
         
         lr = optimizer.param_groups[0]["lr"]
@@ -160,14 +165,20 @@ def train_one_epoch(model, vae,
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
             """
-            epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
+            epoch_1000x = int((effective_step / effective_steps_per_epoch + epoch) * 1000)
             log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
+    
+    # Return effective global step for gradient accumulation
+    if accum_steps > 1:
+        effective_steps_completed = len(data_loader) // accum_steps
+        return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + effective_steps_completed
+    else:
+        return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
 
 
 def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader, optimizer,
@@ -282,7 +293,7 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
         lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
         
         # Forward pass with current batch
-        with torch.amp.autocast('cuda'):
+        with torch.amp.autocast('cuda', dtype=train_dtype):
             # Handle wandb MSE-only logging for pure_diffusion model
             if (args.model_type == "pure_diffusion" and 
                 hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
@@ -397,10 +408,17 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
     # Gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
+    
+    # Return effective global step for gradient accumulation
+    accum_steps = args.grad_accu
+    if accum_steps > 1:
+        effective_steps_completed = len(data_loader) // accum_steps
+        return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + effective_steps_completed
+    else:
+        return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
 
 def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log_writer=None, cfg=1.0,
-             use_ema=True, global_step=None):
+             use_ema=True, global_step=None, eval_dtype=torch.bfloat16, auxiliary_wandb_run_info=None):
     model_without_ddp.eval()
     num_steps = args.num_images // (batch_size * misc.get_world_size()) + 1
     save_folder = os.path.join(args.output_dir, "ariter{}-diffsteps{}-temp{}-{}cfg{}-image{}".format(args.num_iter,
@@ -451,11 +469,14 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
 
         # generation
         with torch.no_grad():
-            # with torch.cuda.amp.autocast():
-            with torch.amp.autocast('cuda', enabled=False):
+            # Enable mixed precision if requested (should provide 1.5-2x speedup)
+            use_amp = getattr(args, 'enable_amp_eval', False)
+            with torch.amp.autocast('cuda', enabled=use_amp, dtype=eval_dtype):
+                # Disable progress bar for faster sampling during evaluation
+                show_progress = not getattr(args, 'disable_progress_bar', False)
                 sampled_tokens = model_without_ddp.sample_tokens(bsz=batch_size, num_iter=args.num_iter, cfg=cfg,
                                                                  cfg_schedule=args.cfg_schedule, labels=labels_gen,
-                                                                 temperature=args.temperature)
+                                                                 temperature=args.temperature, progress=show_progress)
                 sampled_images = vae.decode(sampled_tokens / 0.2325)
 
         # measure speed after the first generation batch
@@ -467,6 +488,9 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
 
         torch.distributed.barrier()
         sampled_images = sampled_images.detach().cpu()
+        # Convert to float16 for NumPy compatibility and memory efficiency
+        if sampled_images.dtype == eval_dtype and eval_dtype != torch.float32:
+            sampled_images = sampled_images.half()  # Convert to fp16, more efficient than float()
         sampled_images = (sampled_images + 1) / 2
         if torch.isnan(sampled_images).any() or torch.isinf(sampled_images).any():
             print("nan detacted!")
@@ -608,7 +632,34 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
                 "recall": recall
             }
             step = global_step if global_step is not None else epoch
-            wandb.log(wandb_metrics, step=step)
+            
+            if auxiliary_wandb_run_info is not None:
+                # Store main run info BEFORE any auxiliary operations
+                main_run_id = wandb.run.id if wandb.run else None
+                main_project = wandb.run.project if wandb.run else "energy-diffusion"
+                
+                # Resume existing auxiliary wandb run using stored ID
+                import wandb as wandb_aux
+                aux_run = wandb_aux.init(
+                    project=auxiliary_wandb_run_info['project'],
+                    id=auxiliary_wandb_run_info['id'],
+                    resume='must',
+                    reinit=True
+                )
+                aux_run.log(wandb_metrics, step=step)
+                aux_run.finish()
+                
+                # Restore main run as current using stored ID
+                if main_run_id:
+                    wandb.init(
+                        project=main_project,
+                        id=main_run_id,
+                        resume='must',
+                        reinit=True
+                    )
+            else:
+                # Log to main wandb run
+                wandb.log(wandb_metrics, step=step)
         postfix = ""
         if use_ema:
            postfix = postfix + "_ema"
@@ -736,7 +787,7 @@ def cache_latents(vae,
     return
 
 
-def log_preview(model, vae, args, epoch, class_id_to_name=None):
+def log_preview(model, vae, args, epoch, class_id_to_name=None, auxiliary_wandb_run_info=None):
     if not misc.is_main_process() or not args.preview:
         return
 
@@ -773,11 +824,37 @@ def log_preview(model, vae, args, epoch, class_id_to_name=None):
         caption  = f"class {lbl}: {cls_name}" if cls_name else f"class {lbl}"
         log_images.append(wandb.Image(img_np, caption=caption))
     if hasattr(args, 'run_name') and args.run_name is not None:
-        wandb.log({"epoch": epoch, "preview": log_images})
+        if auxiliary_wandb_run_info is not None:
+            # Store main run info BEFORE any auxiliary operations
+            main_run_id = wandb.run.id if wandb.run else None
+            main_project = wandb.run.project if wandb.run else "energy-diffusion"
+            
+            # Resume existing auxiliary wandb run using stored ID
+            import wandb as wandb_aux
+            aux_run = wandb_aux.init(
+                project=auxiliary_wandb_run_info['project'],
+                id=auxiliary_wandb_run_info['id'],
+                resume='must',
+                reinit=True
+            )
+            aux_run.log({"epoch": epoch, "preview": log_images})
+            aux_run.finish()
+            
+            # Restore main run as current using stored ID
+            if main_run_id:
+                wandb.init(
+                    project=main_project,
+                    id=main_run_id,
+                    resume='must',
+                    reinit=True
+                )
+        else:
+            # Log to main wandb run
+            wandb.log({"epoch": epoch, "preview": log_images})
     
     
 @torch.no_grad()
-def validate_one_epoch(model, vae, data_loader, device, return_loss_dict=False):
+def validate_one_epoch(model, vae, data_loader, device, return_loss_dict=False, eval_dtype=torch.bfloat16):
     model.eval()
     loss_sum, mse_loss_sum, n_samples = 0.0, 0.0, 0
     from tqdm import tqdm

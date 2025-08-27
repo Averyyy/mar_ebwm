@@ -129,7 +129,15 @@ class MetricLogger(object):
         end = time.time()
         iter_time = SmoothedValue(fmt='{avg:.4f}')
         data_time = SmoothedValue(fmt='{avg:.4f}')
-        space_fmt = ':' + str(len(str(len(iterable)))) + 'd'
+        
+        # Adjust display for gradient accumulation
+        if hasattr(self.args, 'grad_accu') and self.args.grad_accu > 1:
+            total_effective_steps = len(iterable) // self.args.grad_accu
+            space_fmt = ':' + str(len(str(total_effective_steps))) + 'd'
+        else:
+            total_effective_steps = len(iterable)
+            space_fmt = ':' + str(len(str(len(iterable)))) + 'd'
+            
         log_msg = [
             header,
             '[{0' + space_fmt + '}/{1}]',
@@ -147,20 +155,34 @@ class MetricLogger(object):
             yield obj
             iter_time.update(time.time() - end)
             if i % print_freq == 0 or i == len(iterable) - 1:
-                eta_seconds = iter_time.global_avg * (len(iterable) - i)
+                # Calculate effective step for display
+                if hasattr(self.args, 'grad_accu') and self.args.grad_accu > 1:
+                    effective_i = i // self.args.grad_accu
+                    eta_seconds = iter_time.global_avg * (total_effective_steps - effective_i)
+                else:
+                    effective_i = i
+                    eta_seconds = iter_time.global_avg * (len(iterable) - i)
+                    
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
                     print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
+                        effective_i, total_effective_steps, eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time),
                         memory=torch.cuda.max_memory_allocated() / MB))
                 else:
                     print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
+                        effective_i, total_effective_steps, eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
-            self.log_wandb(eta_seconds, iter_time, data_time, global_step + i)
+            # Calculate effective step for wandb logging  
+            # global_step is already effective (from train_one_epoch return), but i is raw
+            if hasattr(self.args, 'grad_accu') and self.args.grad_accu > 1:
+                effective_i = i // self.args.grad_accu
+                wandb_step = global_step + effective_i
+            else:
+                wandb_step = global_step + i
+            self.log_wandb(eta_seconds, iter_time, data_time, wandb_step)
 
             i += 1
             end = time.time()
@@ -171,6 +193,8 @@ class MetricLogger(object):
 
     def log_wandb(self, eta_seconds, iter_time, data_time, step):
         """Centralized wandb logging for both regular and streaming training"""
+        # Use step as-is - the caller should pass the correct effective step
+        effective_step = step
         if is_main_process() and "loss" in self.meters:
             # Determine which loss to use for wandb logging based on wandb_log_mse_only flag
             use_mse_loss = (self.args and 
@@ -201,7 +225,7 @@ class MetricLogger(object):
             try:
                 import wandb
                 if wandb.run is not None:
-                    wandb.log(log_dict, step=step)
+                    wandb.log(log_dict, step=effective_step)
             except ImportError:
                 pass
 

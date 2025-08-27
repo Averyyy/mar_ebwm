@@ -11,6 +11,15 @@ from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
+def get_torch_dtype(dtype_str):
+    """Convert string dtype to torch dtype"""
+    dtype_map = {
+        'fp16': torch.float16,
+        'bf16': torch.bfloat16,
+        'fp32': torch.float32,
+    }
+    return dtype_map.get(dtype_str, torch.bfloat16)
+
 from util.crop import center_crop_arr
 import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
@@ -171,7 +180,7 @@ def get_args_parser():
                         help='[DDiT] Whether to learn the noise prediction sigma')
     
     # DEBT-specific parameters
-    parser.add_argument('--mcmc_num_steps', default=10, type=int, help='[DEBT] Number of MCMC steps')
+    parser.add_argument('--mcmc_num_steps', default=None, type=int, help='[DEBT/EnergyDiffusion] Number of MCMC/energy optimization steps. If None, uses adaptive steps during inference')
     parser.add_argument('--mcmc_step_size', default=0.01, type=float, help='[DEBT] MCMC step size')
     parser.add_argument('--langevin_dynamics_noise', default=0.01, type=float, help='[DEBT] Langevin dynamics noise std')
     parser.add_argument('--denoising_initial_condition', default='random_noise', type=str, 
@@ -198,6 +207,10 @@ def get_args_parser():
     parser.add_argument('--energy_grad_multiplier', default=1.0, type=float,
                         help='[PureDiffusion] Multiplier for energy gradients used as diffusion score')
     parser.add_argument('--langevin_noise_std', default=0.01, type=float, help='[EnergyMLP] Langevin dynamics noise standard deviation')
+    parser.add_argument('--enable_amp_eval', action='store_true',
+                        help='[Evaluation] Enable mixed precision (AMP) during evaluation for speedup')
+    parser.add_argument('--disable_progress_bar', action='store_true',
+                        help='[Evaluation] Disable progress bar during sampling for speedup')
     
     parser.add_argument('--grad_accu', default=1, type=int,
                     help='Number of gradient accumulation steps')
@@ -216,6 +229,8 @@ def get_args_parser():
                         help='comma-separated ImageNet class ids to preview')
     parser.add_argument('--preview_seed', type=int, default=42,
                         help='global torch seed so that the SAME noise is reused each epoch')
+    parser.add_argument('--preview_only', action='store_true',
+                        help='only do preview generation, skip training and wandb initialization')
     
     parser.add_argument('--val_data_path',
                         default='/work/nvme/belh/aqian1/imagenet-1k/val',
@@ -229,6 +244,18 @@ def get_args_parser():
     # Debug: half sampling
     parser.add_argument('--test_half_sampling', action='store_true',
                         help='Debug mode: feed half ground-truth tokens then generate the rest')
+    
+    # Dtype selection
+    parser.add_argument('--train_dtype', default='bfloat16', type=str, 
+                        choices=['fp16', 'bf16', 'fp32'],
+                        help='Data type for training (default: bfloat16)')
+    parser.add_argument('--eval_dtype', default='bfloat16', type=str,
+                        choices=['fp16', 'bf16', 'fp32'], 
+                        help='Data type for evaluation (default: bfloat16)')
+    parser.add_argument('--auxiliary_eval_dtypes', type=str, default='',
+                        help='Comma-separated list of additional eval dtypes to run with separate wandb runs (e.g., "fp16,fp32")')
+    parser.add_argument('--auxiliary_run_suffix', type=str, default='',
+                        help='Suffix to add to auxiliary wandb run names (auto-generated if empty)')
 
     parser.add_argument('--syn_dataloader', action='store_true',
                         help='Use synthetic dataloader (random data) instead of loading from disk')
@@ -435,6 +462,7 @@ def main(args):
                 always_accept_opt_steps=args.always_accept_opt_steps,
                 supervise_energy_landscape=args.supervise_energy_landscape,
                 mcmc_step_size=args.mcmc_step_size,
+                mcmc_num_steps=args.mcmc_num_steps,
                 linear_then_mean=args.linear_then_mean,
                 log_energy_accept_rate=args.log_energy_accept_rate,
                 learnable_mcmc_step_size=args.learnable_mcmc_step_size,
@@ -460,6 +488,7 @@ def main(args):
                 always_accept_opt_steps=args.always_accept_opt_steps,
                 supervise_energy_landscape=args.supervise_energy_landscape,
                 mcmc_step_size=args.mcmc_step_size,
+                mcmc_num_steps=args.mcmc_num_steps,
                 linear_then_mean=args.linear_then_mean,
                 log_energy_accept_rate=args.log_energy_accept_rate,
                 learnable_mcmc_step_size=args.learnable_mcmc_step_size,
@@ -545,14 +574,101 @@ def main(args):
             print("With optim & sched!")
         del checkpoint
         is_resuming_checkpoint = True
+        
+        # Override alpha parameter with manual mcmc_step_size if in preview_only or evaluate mode
+        if (getattr(args, 'preview_only', False) or args.evaluate) and hasattr(model_without_ddp, 'alpha'):
+            mode_name = "Preview-only" if getattr(args, 'preview_only', False) else "Evaluate"
+            print(f"🔧 {mode_name} mode: Overriding checkpoint alpha parameter with manual mcmc_step_size: {args.mcmc_step_size}")
+            model_without_ddp.alpha.data = torch.tensor(args.mcmc_step_size, device=model_without_ddp.alpha.device, dtype=model_without_ddp.alpha.dtype)
+            print(f"✅ Alpha parameter updated: {model_without_ddp.alpha.item()}")
     else:
         model_params = list(model_without_ddp.parameters())
         ema_params = copy.deepcopy(model_params)
         print("Training from scratch")
 
-    # Initialize wandb after checkpoint loading
-    misc.init_wandb(args, is_resuming_checkpoint=is_resuming_checkpoint, resume_path=args.resume)
+    # Initialize wandb after checkpoint loading 
+    # For preview_only mode, create fresh wandb run (no resume to avoid conflicts)
+    if getattr(args, 'preview_only', False):
+        # Create fresh wandb run for preview_only mode to avoid resume conflicts
+        misc.init_wandb(args, is_resuming_checkpoint=False, resume_path=None)
+    else:
+        misc.init_wandb(args, is_resuming_checkpoint=is_resuming_checkpoint, resume_path=args.resume)
 
+    # Initialize global variables for main run tracking
+    global MAIN_RUN_ID, MAIN_PROJECT
+    MAIN_RUN_ID = None
+    MAIN_PROJECT = None
+
+    # Convert dtype arguments to torch dtypes
+    train_dtype = get_torch_dtype(args.train_dtype)
+    eval_dtype = get_torch_dtype(args.eval_dtype)
+    
+    # Parse auxiliary evaluation dtypes and initialize persistent auxiliary runs
+    auxiliary_eval_dtypes = []
+    auxiliary_wandb_run_info = []
+    if args.auxiliary_eval_dtypes and misc.is_main_process():
+        # Store main run info BEFORE creating auxiliary runs
+        main_run_id = wandb.run.id if wandb.run else None
+        main_project = wandb.run.project if wandb.run else "energy-diffusion"
+        main_group = wandb.run.group if wandb.run else None
+        main_config = wandb.run.config if wandb.run else None
+        
+        aux_dtype_names = [dtype.strip() for dtype in args.auxiliary_eval_dtypes.split(',') if dtype.strip()]
+        for aux_dtype_name in aux_dtype_names:
+            aux_dtype = get_torch_dtype(aux_dtype_name)
+            auxiliary_eval_dtypes.append(aux_dtype)
+            
+            # Create auxiliary wandb runs once and store their info
+            if args.run_name:
+                aux_run_name = f"{args.run_name}-eval_{aux_dtype_name}"
+                print(f"🔄 Initializing persistent auxiliary wandb run: {aux_run_name}")
+                
+                # Create auxiliary run and get its ID for later resumption
+                aux_run = wandb.init(
+                    project=main_project,
+                    name=aux_run_name,
+                    group=main_group,
+                    config=main_config,
+                    reinit=True
+                )
+                aux_run_info = {
+                    'name': aux_run_name,
+                    'id': aux_run.id,
+                    'project': aux_run.project
+                }
+                aux_run.finish()  # Finish for now, will resume later
+                auxiliary_wandb_run_info.append(aux_run_info)
+            else:
+                auxiliary_wandb_run_info.append(None)
+        
+        # Restore main run using stored info
+        if main_run_id:
+            wandb.init(
+                project=main_project,
+                id=main_run_id,
+                resume='must',
+                reinit=True
+            )
+        
+        # Store main run info globally for restoration during training
+        MAIN_RUN_ID = main_run_id
+        MAIN_PROJECT = main_project
+        
+        print(f"🔄 Will run auxiliary evaluations with dtypes: {aux_dtype_names}")
+        print(f"📊 Initialized {len(auxiliary_wandb_run_info)} persistent auxiliary wandb runs")
+    elif args.auxiliary_eval_dtypes:
+        # For non-main processes, just parse dtypes
+        aux_dtype_names = [dtype.strip() for dtype in args.auxiliary_eval_dtypes.split(',') if dtype.strip()]
+        for aux_dtype_name in aux_dtype_names:
+            aux_dtype = get_torch_dtype(aux_dtype_name)
+            auxiliary_eval_dtypes.append(aux_dtype)
+            auxiliary_wandb_run_info.append(None)
+    else:
+        # No auxiliary dtypes, but still store main run info if wandb is active
+        if misc.is_main_process() and wandb.run:
+            MAIN_RUN_ID = wandb.run.id
+            MAIN_PROJECT = wandb.run.project
+    
     # log grads/params to wandb once (after wandb initialization)
     # if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
     #     wandb.watch(model_without_ddp, log="all", log_freq=50)
@@ -561,7 +677,7 @@ def main(args):
     if args.evaluate:
         torch.cuda.empty_cache()
         evaluate(model_without_ddp, vae, ema_params, args, 0, batch_size=args.eval_bsz, log_writer=log_writer,
-                 cfg=args.cfg, use_ema=True)
+                 cfg=args.cfg, use_ema=True, eval_dtype=eval_dtype)
         return
     
     if os.path.exists('util/imagenet_id_to_name.txt'):
@@ -586,6 +702,17 @@ def main(args):
         log_preview_half(model_without_ddp, vae, data_loader_train, args, epoch=args.start_epoch, class_id_to_name=class_id_to_name)
         return
 
+    # ------------------------------------------------------------
+    # Preview only mode (no training, no wandb)
+    # ------------------------------------------------------------
+    if args.preview_only:
+        print("🎨 Preview only mode - generating preview images and exiting")
+        # Force enable preview flag for log_preview function to work
+        args.preview = True
+        log_preview(model_without_ddp, vae, args, epoch=args.start_epoch, class_id_to_name=class_id_to_name)
+        print("✅ Preview generation completed")
+        return
+
     # training
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
@@ -593,13 +720,22 @@ def main(args):
     # Calculate global_step for wandb resume
     global_step = 0
     if hasattr(args, '_wandb_run') and args._wandb_run is not None and args.start_epoch > 0:
-        # When resuming, calculate the global step based on the start epoch
-        # This ensures continuity with previous training steps
-        global_step = args.start_epoch * len(data_loader_train)
-        print(f"📈 Resuming training from global_step: {global_step} (calculated from epoch {args.start_epoch})")
+        # When resuming, try to get the actual step from wandb to avoid mismatch
+        try:
+            if wandb.run is not None and wandb.run.step is not None:
+                global_step = wandb.run.step
+                print(f"📈 Resuming training from wandb current step: {global_step}")
+            else:
+                raise ValueError("No wandb step available")
+        except:
+            # Fallback: calculate from epoch (may cause step mismatch)
+            steps_per_epoch = len(data_loader_train) // args.grad_accu if args.grad_accu > 1 else len(data_loader_train)
+            global_step = args.start_epoch * steps_per_epoch
+            print(f"⚠️  Calculating global_step from epoch {args.start_epoch}: {global_step} (may cause wandb step mismatch)")
     elif args.start_epoch > 0:
         # Fallback: calculate from start epoch even without wandb
-        global_step = args.start_epoch * len(data_loader_train)
+        steps_per_epoch = len(data_loader_train) // args.grad_accu if args.grad_accu > 1 else len(data_loader_train)
+        global_step = args.start_epoch * steps_per_epoch
         print(f"📈 Starting from global_step: {global_step} (calculated from epoch {args.start_epoch})")
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -608,7 +744,7 @@ def main(args):
         # validation
         if (args.val) and (epoch % args.val_freq == 0):
             val_result = validate_one_epoch(
-                model_without_ddp, vae, data_loader_val, device, return_loss_dict=True
+                model_without_ddp, vae, data_loader_val, device, return_loss_dict=True, eval_dtype=eval_dtype
             )
             val_total_loss = val_result['total_loss']
             val_mse_loss = val_result['mse_loss']
@@ -629,12 +765,36 @@ def main(args):
         # online evaluation
         if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
             torch.cuda.empty_cache()
+            # Main evaluation with primary dtype
             evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
-                     cfg=1.0, use_ema=True, global_step=global_step)
+                     cfg=1.0, use_ema=True, global_step=global_step, eval_dtype=eval_dtype)
             if not (args.cfg == 1.0 or args.cfg == 0.0):
                 evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
-                         log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step)
+                         log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step, eval_dtype=eval_dtype)
+            
+            # Auxiliary evaluations with different dtypes
+            for i, aux_dtype in enumerate(auxiliary_eval_dtypes):
+                aux_run_info = auxiliary_wandb_run_info[i] if i < len(auxiliary_wandb_run_info) else None
+                aux_run_name = aux_run_info['name'] if aux_run_info else f"aux_eval_{i}"
+                print(f"🔄 Running auxiliary evaluation with dtype {aux_dtype} for wandb run: {aux_run_name}")
+                
+                evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
+                         cfg=1.0, use_ema=True, global_step=global_step, eval_dtype=aux_dtype, auxiliary_wandb_run_info=aux_run_info)
+                if not (args.cfg == 1.0 or args.cfg == 0.0):
+                    evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
+                             log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step, eval_dtype=aux_dtype, auxiliary_wandb_run_info=aux_run_info)
+            
             torch.cuda.empty_cache()
+
+        # Ensure main run is active before training (in case auxiliary evaluations changed wandb.run)
+        if 'MAIN_RUN_ID' in globals() and MAIN_RUN_ID and misc.is_main_process():
+            if not wandb.run or wandb.run.id != MAIN_RUN_ID:
+                wandb.init(
+                    project=MAIN_PROJECT,
+                    id=MAIN_RUN_ID,
+                    resume='must',
+                    reinit=True
+                )
 
         train_stats, global_step = train_one_epoch(
             model, vae,
@@ -643,7 +803,8 @@ def main(args):
             optimizer, device, epoch, loss_scaler,
             log_writer=log_writer,
             args=args,
-            global_step=global_step
+            global_step=global_step,
+            train_dtype=train_dtype
         )
 
         # save checkpoint
@@ -660,7 +821,15 @@ def main(args):
             )
             if do_preview:
                 print(f"Preview sampling at epoch {epoch}")
+                # Main preview with primary dtype
                 log_preview(model_without_ddp, vae, args, epoch, class_id_to_name)
+                
+                # Auxiliary previews with different dtypes
+                for i, aux_dtype in enumerate(auxiliary_eval_dtypes):
+                    aux_run_info = auxiliary_wandb_run_info[i] if i < len(auxiliary_wandb_run_info) else None
+                    aux_run_name = aux_run_info['name'] if aux_run_info else f"aux_preview_{i}"
+                    print(f"🔄 Running auxiliary preview for wandb run: {aux_run_name}")
+                    log_preview(model_without_ddp, vae, args, epoch, class_id_to_name, auxiliary_wandb_run_info=aux_run_info)
             
 
         if misc.is_main_process() and log_writer is not None:

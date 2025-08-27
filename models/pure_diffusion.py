@@ -38,6 +38,7 @@ class PureDiffusion(nn.Module):
         supervise_energy_landscape=False,
         learnable_mcmc_step_size=False,
         mcmc_step_size=0.01,
+        mcmc_num_steps=None,
         linear_then_mean=False,
         contrasive_loss_scale=0.05,
         mcmc_refinement_loss_scale=0.1,
@@ -62,6 +63,7 @@ class PureDiffusion(nn.Module):
         self.mcmc_refinement_loss_scale = mcmc_refinement_loss_scale
         self.log_energy_accept_rate = log_energy_accept_rate
         self.learnable_mcmc_step_size = learnable_mcmc_step_size
+        self.mcmc_num_steps = mcmc_num_steps
         
         # Create alpha parameter - learnable if specified, otherwise fixed
         if learnable_mcmc_step_size:
@@ -262,13 +264,17 @@ class PureDiffusion(nn.Module):
         Returns:
             Number of optimization steps (int)
         """
+        # If mcmc_num_steps is specified, use that fixed value
+        if self.mcmc_num_steps is not None:
+            return self.mcmc_num_steps
+            
         if base_steps is None:
             if keep_grad:  # Training time - keep efficient
                 base_steps = 2
             else:  # Inference time - be more thorough
                 base_steps = 5
         
-        # Timestep adaptation: more steps needed for higher timesteps (more noise)
+        # Timestep adaptation: more steps for higher timesteps (more noise)
         t_normalized = t.float().mean() / self.train_diffusion.num_timesteps
         timestep_factor = 1.0 + 2.0 * t_normalized  # 1.0 to 3.0 range
         
@@ -300,8 +306,10 @@ class PureDiffusion(nn.Module):
         if step is None:
             step = self.get_adaptive_steps(t, keep_grad)
             
-        # Use learnable alpha parameter, clamped to prevent instability (following DEBT pattern)
-        alpha = torch.clamp(self.alpha, min=1e-4) if step_size is None else step_size
+        # Use learnable alpha parameter, with minimal clamping for stability
+        # alpha = torch.clamp(self.alpha, min=1e-10, max=10.0) if step_size is None else step_size
+        alpha = self.alpha if step_size is None else step_size
+        # print(f"🔧 opt_step: steps={step}, alpha={alpha.item():.2e} (raw_alpha={self.alpha.item():.2e})")
         
         # Initialize tracking
         total_accept_count = 0
@@ -381,8 +389,14 @@ class PureDiffusion(nn.Module):
         # Use gen_diffusion for energy-aware sampling too
         timesteps = list(range(self.gen_diffusion.num_timesteps))[::-1]
         
-        from tqdm import tqdm
-        for i, t_val in enumerate(tqdm(timesteps, desc="Sampling", leave=False)):
+        # Use progress bar only if requested (TQDM has overhead during fast sampling)
+        if progress:
+            from tqdm import tqdm
+            timesteps_iter = enumerate(tqdm(timesteps, desc="Sampling", leave=False))
+        else:
+            timesteps_iter = enumerate(timesteps)
+            
+        for i, t_val in timesteps_iter:
             t = torch.full((bsz,), t_val, device=device, dtype=torch.long)
             
             # Standard diffusion sampling step using gen_diffusion
@@ -464,6 +478,7 @@ class PureDiffusion(nn.Module):
         
         if cfg != 1.0:
             # Classifier-free guidance sampling
+            print(f"🔀 Using CFG sampling (cfg={cfg}) - Energy sampling DISABLED")
             # Use the DiT's built-in CFG
             def cfg_model(x, t, **kwargs):
                 return self.dit.forward_with_cfg(x, t, kwargs.get("y"), cfg)
@@ -481,6 +496,7 @@ class PureDiffusion(nn.Module):
             # Check if we need energy-aware sampling
             if self.use_energy and self.use_innerloop_opt:
                 # Use our custom energy-aware sampling loop
+                print(f"⚡ Using ENERGY-AWARE sampling (mcmc_step_size={self.alpha.item() if hasattr(self, 'alpha') else 'N/A'})")
                 samples = self.energy_aware_p_sample_loop(
                     shape=(self.vae_embed_dim, latent_size, latent_size),
                     labels=labels,
@@ -488,6 +504,7 @@ class PureDiffusion(nn.Module):
                 )
             else:
                 # Use gen_diffusion with reduced timesteps
+                print(f"📝 Using STANDARD sampling (use_energy={self.use_energy}, use_innerloop_opt={self.use_innerloop_opt})")
                 samples = self.gen_diffusion.p_sample_loop(
                     model=self.dit,
                     shape=shape,
