@@ -674,6 +674,8 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
+
+    print(f"got args: {args}")
     
     # Set default mcmc_step_size_lr_multiplier to 3 times mcmc_step_size if not specified
     if args.mcmc_step_size_lr_multiplier is None:
