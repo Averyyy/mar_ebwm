@@ -10,7 +10,7 @@ class CachedPTFolder(Dataset):
     """Dataset for latents cached as uncompressed .pt files.
 
     Each ``.pt`` file is a dictionary with keys ``'moments'`` and
-    ``'moments_flip'`` (produced by ``engine_mar.cache_latents`` when
+    ``'moments_flip'`` (produced by ``engine.cache_latents`` when
     ``--cache_format pt`` is selected).  The directory structure follows
     the original ImageNet layout so the class label can be inferred from
     the parent folder name, mirroring the behaviour of

@@ -45,8 +45,8 @@ BLR=${learning_rate}
 BATCH_SIZE=128
 EPOCHES=80
 WARMUP_EPOCHS=4
-MODEL_TYPE=pure_diffusion
-MODEL=pure_diffusion_base
+MODEL_TYPE=ebm
+MODEL=ebm_base
 NUM_EVAL_IMAGES=1000
 NUM_EVAL_STEPS=250
 IMG_SIZE=256
@@ -83,7 +83,7 @@ torchrun \
   --nproc_per_node=${NUM_GPUS} \
   --master_addr=localhost \
   --master_port=$((6748 + SLURM_ARRAY_TASK_ID)) \
-  main_mar.py \
+  main_ebm.py \
   --run_name ${RUN_NAME} \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
@@ -121,7 +121,7 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
   # --online_eval \
   # --eval_freq 20 \
   # --use_fid_stats \
-  # --fid_stats_file fid_stats/imagenet_64_stats.npz \
+  # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
   # --eval_real_dataset /work/nvme/belh/aqian1/imagenet-1k/val \
   # --num_sampling_steps ${NUM_EVAL_STEPS} \
   # --eval_bsz ${EVAL_BATCH_SIZE} \
@@ -133,12 +133,12 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
 #   --nproc_per_node=4 \
 #   --master_addr=localhost \
 #   --master_port=6748 \
-#   main_mar.py \
+#   main_ebm.py \
 #   --run_name test-loggging \
 #   --img_size 64 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
-#   --model_type pure_diffusion \
-#   --model pure_diffusion_base \
+#   --model_type ebm \
+#   --model ebm_base \
 #   --epochs 80 \
 #   --warmup_epochs 4 \
 #   --use_energy \

@@ -22,7 +22,7 @@ BLR=9e-6
 BATCH_SIZE=256
 EPOCHES=500
 WARMUP_EPOCHS=5
-MODEL=pure_diffusion_small
+MODEL=ebm_small
 NUM_EVAL_IMAGES=1000
 NUM_EVAL_STEPS=250
 IMG_SIZE=256
@@ -49,11 +49,11 @@ torchrun \
   --nproc_per_node=4 \
   --master_addr=localhost \
   --master_port=$((5748 + SLURM_ARRAY_TASK_ID)) \
-  main_mar.py \
+  main_ebm.py \
   --run_name ${RUN_NAME} \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
+  --model_type ebm \
   --model ${MODEL} \
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \

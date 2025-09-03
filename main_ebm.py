@@ -26,7 +26,7 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.loader import CachedFolder
 
 from models.vae import AutoencoderKL
-from engine_mar import train_one_epoch, evaluate, log_preview, validate_one_epoch, log_preview_half
+from engine import train_one_epoch, evaluate, log_preview, validate_one_epoch, log_preview_half
 import copy
 import wandb
 
@@ -43,13 +43,13 @@ def safe_load_ckpt(resume_dir):
         raise
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('MAR training with Diffusion Loss', add_help=False)
+    parser = argparse.ArgumentParser('EBM training', add_help=False)
     parser.add_argument('--batch_size', default=16, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * # gpus')
     parser.add_argument('--epochs', default=400, type=int)
 
     # Model parameters
-    parser.add_argument('--model', default='mar_large', type=str, metavar='MODEL',
+    parser.add_argument('--model', default='ebm_small', type=str, metavar='MODEL',
                         help='Name of model to train')
 
     # VAE parameters
@@ -80,7 +80,7 @@ def get_args_parser():
     parser.add_argument('--eval_real_dataset', type=str, default=None, help='path to real dataset for KID and PRC metrics')
     parser.add_argument('--kid_subset_size', type=int, default=None, help='KID subset size (default: auto-select based on dataset size)')
     parser.add_argument('--use_fid_stats', action='store_true', help='use precomputed FID statistics file instead of real dataset for FID calculation')
-    parser.add_argument('--fid_stats_file', type=str, default='fid_stats/adm_in256_stats.npz', help='path to precomputed FID statistics file')
+    parser.add_argument('--fid_stats_file', type=str, default='util/fid_stats/adm_in256_stats.npz', help='path to precomputed FID statistics file')
 
     # Optimizer parameters
     parser.add_argument('--weight_decay', type=float, default=0.02,
@@ -99,22 +99,11 @@ def get_args_parser():
                         help='epochs to warmup LR')
     parser.add_argument('--ema_rate', default=0.9999, type=float)
 
-    # MAR params
-    parser.add_argument('--mask_ratio_min', type=float, default=0.7,
-                        help='Minimum mask ratio')
+    # Training params
     parser.add_argument('--grad_clip', type=float, default=3.0,
                         help='Gradient clip')
-    parser.add_argument('--attn_dropout', type=float, default=0.1,
-                        help='attention dropout')
-    parser.add_argument('--proj_dropout', type=float, default=0.1,
-                        help='projection dropout')
-    parser.add_argument('--buffer_size', type=int, default=64)
 
-    # Diffusion Loss params
-    parser.add_argument('--diffloss_d', type=int, default=12)
-    parser.add_argument('--diffloss_w', type=int, default=1536)
     parser.add_argument('--num_sampling_steps', type=str, default="250")
-    parser.add_argument('--diffusion_batch_mul', type=int, default=1)
     parser.add_argument('--temperature', default=1.0, type=float, help='diffusion loss sampling temperature')
 
     # Dataset parameters
@@ -157,8 +146,8 @@ def get_args_parser():
                         help='Format of cached latents (npz or pt or ptshard)')
     
     # model selection
-    parser.add_argument('--model_type', default='mar', choices=['mar', 'ddit', 'debt', 'debt_diffusion', 'pure_diffusion'],
-                         help="Type of model to run ('mar' for MAR, 'ddit' for DDiT, 'debt' for DEBT, 'debt_diffusion' for DEBT+IRED, 'pure_diffusion' for pure diffusion (use --use_energy for energy-based diffusion)")
+    parser.add_argument('--model_type', default='ebm', choices=['ebm'],
+                         help="Type of model to run ('ebm' for pure diffusion, use --use_energy for energy-based diffusion)")
     # ---------------- Energy Diffusion args (re-added) ----------------
     parser.add_argument('--dit_model', type=str, default=None, help='[EnergyDiffusion] DiT model size, e.g. DiT-B/4. Overrides embed_dim, depth, num_heads')
     parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='[EnergyDiffusion] Number of diffusion timesteps')
@@ -166,30 +155,12 @@ def get_args_parser():
     parser.add_argument('--mcmc_refinement_loss_scale', default=0.1, type=float, help='[EnergyDiffusion] MCMC refinement loss scale for alpha learning')
     parser.add_argument('--linear_then_mean', action='store_true', help='[EnergyDiffusion] If set, EnergyLayer applies linear layers first then mean pooling')
 
-    # DDiT-specific parameters (only used if --model_type ddit is specified)
+    # Model architecture parameters
     parser.add_argument('--run_name', default=None, help='name of the run for logging. If not specified, wandb logging is disabled')
-    parser.add_argument('--embed_dim', default=1024, type=int,
-                        help='[DDiT] Embedding dimension')
-    parser.add_argument('--depth', default=16, type=int,
-                        help='[DDiT] Number of transformer layers')
-    parser.add_argument('--num_heads', default=16, type=int,
-                        help='[DDiT] Number of attention heads')
-    parser.add_argument('--mlp_ratio', default=4.0, type=float,
-                        help='[DDiT] MLP hidden dim expansion ratio')
-    parser.add_argument('--learn_sigma', action='store_true',
-                        help='[DDiT] Whether to learn the noise prediction sigma')
     
-    # DEBT-specific parameters
-    parser.add_argument('--mcmc_num_steps', default=None, type=int, help='[DEBT/EnergyDiffusion] Number of MCMC/energy optimization steps. If None, uses adaptive steps during inference')
-    parser.add_argument('--mcmc_step_size', default=0.01, type=float, help='[DEBT] MCMC step size')
-    parser.add_argument('--langevin_dynamics_noise', default=0.01, type=float, help='[DEBT] Langevin dynamics noise std')
-    parser.add_argument('--denoising_initial_condition', default='random_noise', type=str, 
-                        choices=['random_noise', 'most_recent_embedding', 'zeros'], 
-                        help='[DEBT] Initial condition for denoising')
-    
-    # Energy MLP specific parameters
-    parser.add_argument('--use_energy_loss', action='store_true',
-                        help='Use energy-based loss instead of diffusion loss')
+    # Energy Diffusion parameters  
+    parser.add_argument('--mcmc_num_steps', default=None, type=int, help='[EnergyDiffusion] Number of MCMC/energy optimization steps. If None, uses adaptive steps during inference')
+    parser.add_argument('--mcmc_step_size', default=0.01, type=float, help='[EnergyDiffusion] MCMC step size')
     parser.add_argument('--use_energy', action='store_true',
                         help='[PureDiffusion] Use IRED-style energy diffusion mode')
     parser.add_argument('--use_innerloop_opt', action='store_true',
@@ -199,7 +170,7 @@ def get_args_parser():
     parser.add_argument('--supervise_energy_landscape', action='store_true',
                         help='[PureDiffusion] Use IRED-style energy landscape supervision during training')
     parser.add_argument('--wandb_log_mse_only', action='store_true',
-                        help='[PureDiffusion] When using pure_diffusion with supervise_energy_landscape, only log MSE loss to wandb (not total loss)')
+                        help='[PureDiffusion] When using ebm with supervise_energy_landscape, only log MSE loss to wandb (not total loss)')
     parser.add_argument('--log_energy_accept_rate', action='store_true',
                         help='[PureDiffusion] Log accept rate during opt_step in energy diffusion sampling for each picture')
     parser.add_argument('--learnable_mcmc_step_size', action='store_true',
@@ -241,7 +212,7 @@ def get_args_parser():
     parser.add_argument('--val', action='store_true',
                         help='')
 
-    # Debug: half sampling
+    # Debug: half sampling (preview first half tokens with gt, and next half with inferenced tokens)
     parser.add_argument('--test_half_sampling', action='store_true',
                         help='Debug mode: feed half ground-truth tokens then generate the rest')
     
@@ -254,8 +225,6 @@ def get_args_parser():
                         help='Data type for evaluation (default: bfloat16)')
     parser.add_argument('--auxiliary_eval_dtypes', type=str, default='',
                         help='Comma-separated list of additional eval dtypes to run with separate wandb runs (e.g., "fp16,fp32")')
-    parser.add_argument('--auxiliary_run_suffix', type=str, default='',
-                        help='Suffix to add to auxiliary wandb run names (auto-generated if empty)')
 
     parser.add_argument('--syn_dataloader', action='store_true',
                         help='Use synthetic dataloader (random data) instead of loading from disk')
@@ -365,90 +334,17 @@ def main(args):
     else:
         data_loader_val = None
 
-    # define the vae and mar model
+    # define the vae and model
     vae = AutoencoderKL(embed_dim=args.vae_embed_dim, ch_mult=(1, 1, 2, 2, 4), ckpt_path=args.vae_path).cuda().eval()
     for param in vae.parameters():
         param.requires_grad = False
 
 
-    if args.model_type == "ddit":
-        from models.ddit import DDiT  # import the DDiT model
-        model = DDiT(
-            img_size=args.img_size,
-            vae_stride=args.vae_stride,
-            patch_size=args.patch_size,
-            embed_dim=args.embed_dim,            # new argument for DDiT
-            depth=args.depth,                    # new argument for DDiT
-            num_heads=args.num_heads,            # new argument for DDiT
-            mlp_ratio=args.mlp_ratio,            # new argument for DDiT
-            class_num=args.class_num,
-            dropout_prob=args.attn_dropout,      # you can reuse (--dropout_prob) if appropriate
-            learn_sigma=args.learn_sigma,        # new argument for DDiT
-            num_sampling_steps=args.num_sampling_steps,
-            diffusion_batch_mul=args.diffusion_batch_mul,
-        )
-    elif args.model_type == "debt":
-        from models import debt
-        # Check if args.model specifies a DEBT variant (debt_base, debt_large, etc.)
-        if hasattr(debt, args.model):
-            model = debt.__dict__[args.model](
-                img_size=args.img_size,
-                vae_stride=args.vae_stride,
-                patch_size=args.patch_size,
-                class_num=args.class_num,
-                dropout_prob=args.attn_dropout,
-                mcmc_num_steps=args.mcmc_num_steps,
-                mcmc_step_size=args.mcmc_step_size,
-                langevin_dynamics_noise=args.langevin_dynamics_noise,
-                denoising_initial_condition=args.denoising_initial_condition,
-            )
-        else:
-            # Fallback to manual specification
-            from models.debt import DEBT
-            model = DEBT(
-                img_size=args.img_size,
-                vae_stride=args.vae_stride,
-                patch_size=args.patch_size,
-                embed_dim=args.embed_dim,
-                depth=args.depth,
-                num_heads=args.num_heads,
-                mlp_ratio=args.mlp_ratio,
-                class_num=args.class_num,
-                dropout_prob=args.attn_dropout,
-                mcmc_num_steps=args.mcmc_num_steps,
-                mcmc_step_size=args.mcmc_step_size,
-                langevin_dynamics_noise=args.langevin_dynamics_noise,
-                denoising_initial_condition=args.denoising_initial_condition,
-            )
-    elif args.model_type == "debt_diffusion":
-        from models import debt_diffusion
-        # Check if args.model specifies a DEBT_diffusion variant
-        if hasattr(debt_diffusion, args.model):
-            model = debt_diffusion.__dict__[args.model](
-                img_size=args.img_size,
-                vae_stride=args.vae_stride,
-                patch_size=args.patch_size,
-                class_num=args.class_num,
-                diffusion_timesteps=getattr(args, 'diffusion_timesteps', 10),
-            )
-        else:
-            # Fallback to manual specification
-            from models.debt_diffusion import DEBTDiffusion
-            model = DEBTDiffusion(
-                img_size=args.img_size,
-                vae_stride=args.vae_stride,
-                patch_size=args.patch_size,
-                embed_dim=getattr(args, 'embed_dim', 1024),
-                depth=getattr(args, 'depth', 16),
-                num_heads=getattr(args, 'num_heads', 16),
-                class_num=args.class_num,
-                diffusion_timesteps=getattr(args, 'diffusion_timesteps', 10),
-            )
-    elif args.model_type == "pure_diffusion":
-        from models import pure_diffusion
-        # Check if args.model specifies a pure diffusion variant
-        if hasattr(pure_diffusion, args.model):
-            model = pure_diffusion.__dict__[args.model](
+    if args.model_type == "ebm":
+        from models import ebm
+        # Check if args.model specifies a ebm variant
+        if hasattr(ebm, args.model):
+            model = ebm.__dict__[args.model](
                 img_size=args.img_size,
                 vae_stride=args.vae_stride,
                 patch_size=args.patch_size,
@@ -471,9 +367,9 @@ def main(args):
                 energy_gradient_multiplier=args.energy_grad_multiplier,
             )
         else:
-            # Fallback to default pure diffusion model 
-            from models.pure_diffusion import PureDiffusion
-            model = PureDiffusion(
+            # Fallback to default ebm model 
+            from models import EBM
+            model = EBM(
                 img_size=args.img_size,
                 vae_stride=args.vae_stride,
                 patch_size=args.patch_size,
@@ -496,31 +392,6 @@ def main(args):
                 mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
                 energy_gradient_multiplier=args.energy_grad_multiplier,
             )
-    else:
-        from models import mar
-        model = mar.__dict__[args.model](
-            img_size=args.img_size,
-            vae_stride=args.vae_stride,
-            patch_size=args.patch_size,
-            vae_embed_dim=args.vae_embed_dim,
-            mask_ratio_min=args.mask_ratio_min,
-            label_drop_prob=args.label_drop_prob,
-            class_num=args.class_num,
-            attn_dropout=args.attn_dropout,
-            proj_dropout=args.proj_dropout,
-            buffer_size=args.buffer_size,
-            grad_checkpointing=args.grad_checkpointing,
-            # Loss type selection
-            use_energy_loss=args.use_energy_loss,
-            # DiffLoss parameters
-            diffloss_d=args.diffloss_d,
-            diffloss_w=args.diffloss_w,
-            num_sampling_steps=args.num_sampling_steps,
-            diffusion_batch_mul=args.diffusion_batch_mul,
-            # Energy loss parameters
-            mcmc_step_size=args.mcmc_step_size,
-            langevin_noise_std=args.langevin_noise_std,
-        )
 
     print("Model = %s" % str(model))
     # following timm: set wd as 0 for bias and norm layers
@@ -543,7 +414,7 @@ def main(args):
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
-    # no weight decay on bias, norm layers, and diffloss MLP    (legacy for mar)
+    # no weight decay on bias, norm layers
     param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay, (), args)
     # alpha_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' in name]
     # other_params = [param for name, param in model_without_ddp.named_parameters() if 'alpha' not in name]
@@ -558,7 +429,6 @@ def main(args):
     # resume training
     is_resuming_checkpoint = False
     if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
-        # checkpoint = torch.load(os.path.join(args.resume, "checkpoint-last.pth"), map_location='cpu', weights_only=False)
         checkpoint = safe_load_ckpt(args.resume)
         model_without_ddp.load_state_dict(checkpoint['model'])
         model_params = list(model_without_ddp.parameters())
@@ -703,7 +573,7 @@ def main(args):
         return
 
     # ------------------------------------------------------------
-    # Preview only mode (no training, no wandb)
+    # Preview only mode
     # ------------------------------------------------------------
     if args.preview_only:
         print("🎨 Preview only mode - generating preview images and exiting")

@@ -31,8 +31,8 @@ source activate mar_gh200
 cd /work/hdd/bdta/aqian1/mar_ebwm
 
 # --- Parameters ---
-MODEL_TYPE=pure_diffusion
-MODEL=pure_diffusion_base
+MODEL_TYPE=ebm
+MODEL=ebm_base
 IMG_SIZE=256
 DIFFUSION_TIMESTEPS=500
 
@@ -54,7 +54,7 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=$((7638 + SLURM_ARRAY_TASK_ID)) \
-  main_mar.py \
+  main_ebm.py \
   --run_name preview-mcmc-${mcmc_step_size} \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
@@ -80,12 +80,11 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=7638 \
-  main_mar.py \
-  --run_name test-mcmc \
+  main_ebm.py \
   --img_size 256 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_base \
+  --model_type ebm \
+  --model ebm_base \
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size 1e-10 \

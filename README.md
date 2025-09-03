@@ -1,34 +1,17 @@
 # Energy-Diffusion Outscales Diffusion <br><sub>Official PyTorch Implementation</sub>
 
 [![arXiv](#TODO)&nbsp;
-<!-- [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/autoregressive-image-generation-without/image-generation-on-imagenet-256x256)](https://paperswithcode.com/sota/image-generation-on-imagenet-256x256?p=autoregressive-image-generation-without) -->
-<!-- [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](http://colab.research.google.com/github/LTH14/mar/blob/main/demo/run_mar.ipynb) -->
-<!-- [![huggingface](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-mar-yellow)](https://huggingface.co/jadechoghari/mar)&nbsp; -->
-
-<!-- <p align="center">
-  <img src="demo/visual.png" width="720">
-</p> -->
 
 This is a PyTorch/GPU implementation of the paper [Energy-Diffusion Outscales Diffusion](#TODO) (#TODO ICLRbalabala):
 
-<!-- ```
-@article{li2024autoregressive,
-  title={Autoregressive Image Generation without Vector Quantization},
-  author={Li, Tianhong and Tian, Yonglong and Li, He and Deng, Mingyang and He, Kaiming},
-  journal={arXiv preprint arXiv:2406.11838},
-  year={2024}
-}
-``` -->
-
 This repo contains:
 
-* 🪐 A simple PyTorch implementation of [Standard & Energy diffusion](models/pure_diffusion.py)
+* 🪐 A simple PyTorch implementation of [Standard & Energy diffusion](models/ebm.py)
 * ⚡️ Pre-trained class-conditional energy diffusion models trained on ImageNet 64x64 & 256x256
-<!-- * 💥 A self-contained [Colab notebook](http://colab.research.google.com/github/LTH14/mar/blob/main/demo/run_mar.ipynb) for running various pre-trained MAR models -->
-* 🛸 An Energy diffusion [training and evaluation script](main_mar.py) using PyTorch DDP
+
+* 🛸 An Energy diffusion [training and evaluation script](main_ebm.py) using PyTorch DDP
 * 👏 [Credit] A lot of training pipeline codes are borrowed from [MAR](https://github.com/LTH14/mar), huge thanks to the authors!
 
-<!-- * 🎉 Also checkout our [Hugging Face model cards](https://huggingface.co/jadechoghari/mar) and [Gradio demo](https://huggingface.co/spaces/jadechoghari/mar) (thanks [@jadechoghari](https://github.com/jadechoghari)). --> -->
 
 ## Preparation
 
@@ -57,9 +40,9 @@ Download pre-trained VAE and energy diffusion models:
 python util/download.py
 ```
 
-For convenience, our pre-trained MAR models can be downloaded directly here as well:
+For convenience, our pre-trained EBM models can be downloaded directly here as well:
 
-| MAR Model                                                              | FID-50K | Inception Score | #params | 
+| EBM Model                                                              | FID-50K | Inception Score | #params | 
 |------------------------------------------------------------------------|---------|-----------------|---------|
 | [EBM-Base](#TODO) | #TODO    | #TODO           | 130M    |
 | [EBM-Large](#TODO) | #TODO    | #TODO           | 458M    |
@@ -68,7 +51,7 @@ For convenience, our pre-trained MAR models can be downloaded directly here as w
 ### (Optional) Caching VAE Latents
 
 Given that our data augmentation consists of simple center cropping and random flipping, 
-the VAE latents can be pre-computed and saved to `CACHED_PATH` to save computations during MAR training:
+the VAE latents can be pre-computed and saved to `CACHED_PATH` to save computations during EBM training:
 
 ```
 torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 \
@@ -84,18 +67,6 @@ Cache format:
 2. `ptshard`: *Recommended* a shard format that is more efficient for dataloading on gh200 gpus.
 
 check `slurm/job_configs/cache_latents.sh`
-
-<!-- ## Usage -->
-
-<!-- ### Demo
-Run our interactive visualization [demo](http://colab.research.google.com/github/LTH14/mar/blob/main/demo/run_mar.ipynb) using Colab notebook!
-
-### Local Gradio App
-
-```
-python demo/gradio_app.py 
-``` -->
-
 
 
 ### Training
@@ -132,8 +103,8 @@ A. Training pipeline:
   All of the evaluation data are logged to wandb by the global step (which is also important for resuming wandb).
 
 B. Model (energy diffusion, EDM):
-  1. All of the diffusion models are located in `models/pure_diffusion.py`. By default, it is standard diffusion using vanilla DIT. 
-  2. To train any diffusion model, please set `model_type` to `pure_diffusion` and `model` to `pure_diffusion_base` (or `pure_diffusion_large` or `pure_diffusion_xlarge`). The default training setting is standard diffusion.
+  1. All of the diffusion models are located in `models/ebm.py`. By default, it is standard diffusion using vanilla DIT. 
+  2. To train any diffusion model, please set `model_type` to `ebm` and `model` to `ebm_base` (or `ebm_large` or `ebm_xlarge`). The default training setting is standard diffusion.
   3. To train energy diffusion, please set `--use_energy`. Other args explanation:
     1. `--use_innerloop_opt`: To enable mcmc during sampling process.
     2. `--mcmc_step_size`: To set the MCMC step size. If `--learnable_mcmc_step_size` is not set, then this would not influence training, just inference.
@@ -154,12 +125,12 @@ B. Model (energy diffusion, EDM):
 Script for the default setting (EDM-Base, 500 diffusion steps, 80 epochs, 128 batchsize, 9e-6 blr):
 ```
 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
-main_mar.py \
+main_ebm.py \
   --run_name ${RUN_NAME} \
   --img_size 256 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_base \
+  --model_type ebm \
+  --model ebm_base \
   --epochs 20 \
   --warmup_epochs 1 \
   --use_energy \
@@ -182,7 +153,7 @@ main_mar.py \
 
 
 Args explanations: 
-- `model_type`: To train energy diffusion, set to `pure_diffusion`.
+- `model_type`: To train energy diffusion, set to `ebm`.
 - (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_PATH}` to the arguments. 
 Training time with cached latents is ~1d11h on 16 H100 GPUs with `--batch_size 128` (nearly 2x faster than without caching).
 Note that this may slightly reduce training speed.
@@ -192,7 +163,7 @@ Note that this may slightly reduce training speed.
 Evaluate MAR-B (DiffLoss MLP with 6 blocks and a width of 1024 channels, 800 epochs) with classifier-free guidance:
 ```
 torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
-main_mar.py \
+main_ebm.py \
 --model mar_base --diffloss_d 6 --diffloss_w 1024 \
 --eval_bsz 256 --num_images 50000 \
 --num_iter 256 --num_sampling_steps 100 --cfg 2.9 --cfg_schedule linear --temperature 1.0 \
@@ -204,7 +175,7 @@ main_mar.py \
 Evaluate MAR-L (DiffLoss MLP with 8 blocks and a width of 1280 channels, 800 epochs) with classifier-free guidance:
 ```
 torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
-main_mar.py \
+main_ebm.py \
 --model mar_large --diffloss_d 8 --diffloss_w 1280 \
 --eval_bsz 256 --num_images 50000 \
 --num_iter 256 --num_sampling_steps 100 --cfg 3.0 --cfg_schedule linear --temperature 1.0 \
@@ -216,7 +187,7 @@ main_mar.py \
 Evaluate MAR-H (DiffLoss MLP with 12 blocks and a width of 1536 channels, 800 epochs) with classifier-free guidance:
 ```
 torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
-main_mar.py \
+main_ebm.py \
 --model mar_huge --diffloss_d 12 --diffloss_w 1536 \
 --eval_bsz 128 --num_images 50000 \
 --num_iter 256 --num_sampling_steps 100 --cfg 3.2 --cfg_schedule linear --temperature 1.0 \
@@ -228,13 +199,23 @@ main_mar.py \
 - Set `--cfg 1.0 --temperature 0.95` to evaluate without classifier-free guidance.
 - Generation speed can be significantly increased by reducing the number of autoregressive iterations (e.g., `--num_iter 64`).
 
-## Acknowledgements
-We thank Congyue Deng and Xinlei Chen for helpful discussion. We thank
-Google TPU Research Cloud (TRC) for granting us access to TPUs, and Google Cloud Platform for
-supporting GPU resources.
+## Directory explanation:
+./diffusion: all the diffusion util functions
+./env_setup: scripts for setting up environments (on different systems)
+./models: the models used in the paper, including DiT, EBM, and vae tokenizer
+./output: [ignored] default output folder when you run experiments
+./slurm/job_configs: all the slurm scripts
+./src: torch-fidelity files
+./util/*.py: all the util functions needed in training/inference
+./util/scripts: all the scripts needed for preparing dataset, computing metrics, etc.
+./util/fid_stats: all the fid stats files when evaluating fids. including imagenet1k-256 and imagenet1k-64 stats.
+./main_ebm.py: the main training script for energy diffusion
+./main_cache.py: the main script for caching the vae latents
+./engine.py: the engine for training/inference
 
-A large portion of codes in this repo is based on [MAE](https://github.com/facebookresearch/mae), [MAGE](https://github.com/LTH14/mage) and [DiT](https://github.com/facebookresearch/DiT).
+
+A large portion of codes in this repo is based on [MAR](https://github.com/LTH14/mar) and [DiT](https://github.com/facebookresearch/DiT).
 
 ## Contact
 
-If you have any questions, feel free to contact me through email (tianhong@mit.edu). Enjoy!
+If you have any questions, feel free to contact me through email (hangkai2@illinois.edu). Enjoy!

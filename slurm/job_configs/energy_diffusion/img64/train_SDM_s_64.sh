@@ -20,8 +20,8 @@ BLR=9e-6
 BATCH_SIZE=1024
 EPOCHES=2000
 WARMUP_EPOCHS=100
-MODEL_TYPE=pure_diffusion
-MODEL=pure_diffusion_small
+MODEL_TYPE=ebm
+MODEL=ebm_small
 NUM_EVAL_IMAGES=1000
 NUM_EVAL_STEPS=250
 IMG_SIZE=64
@@ -50,7 +50,7 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=$((8489 + SLURM_ARRAY_TASK_ID)) \
-  main_mar.py \
+  main_ebm.py \
   --run_name ${RUN_NAME} \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
@@ -70,7 +70,7 @@ torchrun \
   --online_eval \
   --eval_freq 50 \
   --use_fid_stats \
-  --fid_stats_file fid_stats/imagenet_64_stats.npz \
+  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
   --eval_real_dataset /work/hdd/bdta/aqian1/data/imagenet-1k-64/val \
   --num_sampling_steps ${NUM_EVAL_STEPS} \
   --eval_bsz 256 \

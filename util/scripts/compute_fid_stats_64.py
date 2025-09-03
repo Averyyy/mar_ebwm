@@ -14,7 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description='Compute FID statistics for 64x64 ImageNet')
     parser.add_argument('--data_path', type=str, required=True,
                         help='Path to ImageNet validation dataset')
-    parser.add_argument('--output_path', type=str, default='fid_stats/imagenet_64_stats.npz',
+    parser.add_argument('--output_path', type=str, default='util/fid_stats/imagenet_64_stats.npz',
                         help='Output path for FID statistics')
     parser.add_argument('--img_size', type=int, default=64,
                         help='Image size to resize to')
@@ -29,7 +29,7 @@ def main():
     print(f"Output path: {args.output_path}")
     
     # Use torch-fidelity's calculate_metrics to compute statistics
-    # This is the same API used in engine_mar.py, ensuring compatibility
+    # This is the same API used in engine.py
     start_time = time.time()
     
     try:

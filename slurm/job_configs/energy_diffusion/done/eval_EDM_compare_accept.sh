@@ -19,12 +19,12 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=6748 \
-  main_mar.py \
+  main_ebm.py \
   --run_name EDM-eval-s64-step_0.001-diffusion_step-500-c1k-always_accept \
   --img_size 64 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_small \
+  --model_type ebm \
+  --model ebm_small \
   --use_energy \
   --use_innerloop_opt \
   --always_accept_opt_steps \
@@ -37,7 +37,7 @@ torchrun \
   --num_sampling_steps 250 \
   --evaluate \
   --use_fid_stats \
-  --fid_stats_file fid_stats/imagenet_64_stats.npz \
+  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
   --eval_real_dataset /work/hdd/bdta/aqian1/data/imagenet-1k-64/val \
   --eval_bsz 256 \
   --num_images 1000 \
@@ -53,7 +53,7 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=7748 \
-  main_mar.py \
+  main_ebm.py \
   --run_name EDM-eval-s64-step_0.001-diffusion_step-500-c1k-vanilla \
   --img_size 64 \
   --use_cached \
@@ -61,15 +61,15 @@ torchrun \
   --cached_format ptshard \
   --data_path /work/hdd/bdta/aqian1/data/imagenet-1k-64 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_small \
+  --model_type ebm \
+  --model ebm_small \
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size 0.001 \
   --diffusion_timesteps 500 \
   --num_sampling_steps 250 \
   --use_fid_stats \
-  --fid_stats_file fid_stats/imagenet_64_stats.npz \
+  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
   --eval_real_dataset /work/hdd/bdta/aqian1/data/imagenet-1k-64/val \
   --eval_bsz 256 \
   --num_images 1000 \

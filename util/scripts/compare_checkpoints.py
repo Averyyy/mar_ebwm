@@ -137,7 +137,7 @@ def main():
     ).to(device).eval()
     
     # Initialize model
-    print("Initializing MAR model...")
+    print("Initializing model...")
     model = mar.mar_base(
         img_size=64,
         vae_stride=16,

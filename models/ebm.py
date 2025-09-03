@@ -2,12 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.dit.dit import DiT, DiT_models
+from models.dit import DiT, DiT_models
 
-class PureDiffusion(nn.Module):
+class EBM(nn.Module):
     """
-    Pure diffusion model that takes VAE encoded latents as input.
-    Compatible with MAR training pipeline but uses purely diffusion-based generation.
+    Energy-Based Diffusion Model that takes VAE encoded latents as input.
     """
     
     def __init__(
@@ -205,8 +204,7 @@ class PureDiffusion(nn.Module):
     
     def forward(self, x, labels, return_loss_dict=False):
         """
-        Training forward pass. Compatible with MAR training pipeline.
-        
+        Training forward pass. 
         Args:
             x: VAE encoded latent tensor [B, C, H, W]
             labels: Class labels [B]
@@ -452,7 +450,7 @@ class PureDiffusion(nn.Module):
         **kwargs
     ):
         """
-        Generate samples using pure diffusion. Compatible with MAR sample_tokens interface.
+        Generate samples using pure diffusion. 
         
         Args:
             bsz: Batch size
@@ -517,21 +515,42 @@ class PureDiffusion(nn.Module):
         return samples
 
 
-def pure_diffusion_small(**kwargs):
-    """Pure diffusion model with DiT-S backbone"""
-    return PureDiffusion(dit_model="DiT-S/1", **kwargs)
+def ebm_small(**kwargs):
+    """Energy-based model with DiT-S backbone"""
+    return EBM(dit_model="DiT-S/1", **kwargs)
 
+
+def ebm_base(**kwargs):
+    """Energy-based model with DiT-B backbone"""
+    return EBM(dit_model="DiT-B/1", **kwargs)
+
+
+def ebm_large(**kwargs):
+    """Energy-based model with DiT-L backbone"""
+    return EBM(dit_model="DiT-L/1", **kwargs)
+
+
+def ebm_xlarge(**kwargs):
+    """Energy-based model with DiT-XL backbone"""
+    return EBM(dit_model="DiT-XL/1", **kwargs)
+
+
+# Backward compatibility aliases for old pure_diffusion names
+def pure_diffusion_small(**kwargs):
+    """DEPRECATED: Use ebm_small instead"""
+    return ebm_small(**kwargs)
 
 def pure_diffusion_base(**kwargs):
-    """Pure diffusion model with DiT-B backbone"""
-    return PureDiffusion(dit_model="DiT-B/1", **kwargs)
-
+    """DEPRECATED: Use ebm_base instead"""
+    return ebm_base(**kwargs)
 
 def pure_diffusion_large(**kwargs):
-    """Pure diffusion model with DiT-L backbone"""
-    return PureDiffusion(dit_model="DiT-L/1", **kwargs)
-
+    """DEPRECATED: Use ebm_large instead"""
+    return ebm_large(**kwargs)
 
 def pure_diffusion_xlarge(**kwargs):
-    """Pure diffusion model with DiT-XL backbone"""
-    return PureDiffusion(dit_model="DiT-XL/1", **kwargs)
+    """DEPRECATED: Use ebm_xlarge instead"""
+    return ebm_xlarge(**kwargs)
+
+# For backward compatibility in imports
+PureDiffusion = EBM

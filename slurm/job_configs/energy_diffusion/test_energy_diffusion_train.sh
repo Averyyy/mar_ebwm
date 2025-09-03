@@ -35,16 +35,16 @@
 #   --nproc_per_node=1 \
 #   --master_addr=localhost \
 #   --master_port=$((5748 + SLURM_ARRAY_TASK_ID)) \
-#   main_mar.py \
+#   main_ebm.py \
 #   --run_name ${RUN_NAME} \
 #   --img_size 64 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
-#   --model_type pure_diffusion \
+#   --model_type ebm \
 #   --use_energy \
 #   --use_innerloop_opt \
 #   --mcmc_step_size ${step_size} \
 #   --mcmc_step_size_lr_multiplier ${multiplier} \
-#   --model pure_diffusion_small \
+#   --model ebm_small \
 #   --epochs 80000 \
 #   --warmup_epochs 2000 \
 #   --batch_size 4096 \
@@ -74,15 +74,15 @@
 #   --nproc_per_node=4 \
 #   --master_addr=localhost \
 #   --master_port=4837 \
-#   main_mar.py \
+#   main_ebm.py \
 #   --run_name test_edm_256 \
 #   --img_size 256 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
-#   --model_type pure_diffusion \
+#   --model_type ebm \
 #   --use_energy \
 #   --use_innerloop_opt \
 #   --mcmc_step_size 0.1 \
-#   --model pure_diffusion_small \
+#   --model ebm_small \
 #   --epochs 500 \
 #   --warmup_epochs 5 \
 #   --batch_size 256 \
@@ -110,11 +110,11 @@
 #   --nproc_per_node=1 \
 #   --master_addr=localhost \
 #   --master_port=5750 \
-#   main_mar.py \
+#   main_ebm.py \
 #   --img_size 64 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
-#   --model_type pure_diffusion \
-#   --model pure_diffusion_small \
+#   --model_type ebm \
+#   --model ebm_small \
 #   --use_energy \
 #   --use_innerloop_opt \
 #   --supervise_energy_landscape \
@@ -151,11 +151,11 @@
 #   --nproc_per_node=4 \
 #   --master_addr=localhost \
 #   --master_port=15149 \
-#   main_mar.py \
+#   main_ebm.py \
 #   --img_size 64 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
-#   --model_type pure_diffusion \
-#   --model pure_diffusion_small \
+#   --model_type ebm \
+#   --model ebm_small \
 #   --use_energy \
 #   --use_innerloop_opt \
 #   --supervise_energy_landscape \
@@ -182,12 +182,12 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=1491 \
-  main_mar.py \
+  main_ebm.py \
   --run_name EDM-8192-32 \
   --img_size 64 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_small \
+  --model_type ebm \
+  --model ebm_small \
   --use_energy \
   --use_innerloop_opt \
   --epochs 500 \
@@ -223,12 +223,12 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=4831 \
-  main_mar.py \
+  main_ebm.py \
   --run_name EDM-test-dtype \
   --img_size 64 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_base \
+  --model_type ebm \
+  --model ebm_base \
   --epochs 500 \
   --warmup_epochs 10 \
   --use_energy \
@@ -248,7 +248,7 @@ torchrun \
   --online_eval \
   --eval_freq 1 \
   --use_fid_stats \
-  --fid_stats_file fid_stats/imagenet_64_stats.npz \
+  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
   --eval_real_dataset /work/hdd/bdta/aqian1/data/val-64-c7 \
   --num_sampling_steps 20 \
   --eval_bsz 256 \
@@ -260,11 +260,11 @@ torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
   --master_port=6751 \
-  main_mar.py \
+  main_ebm.py \
   --img_size 256 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_base \
+  --model_type ebm \
+  --model ebm_base \
   --epochs 20 \
   --warmup_epochs 1 \
   --use_energy \
@@ -284,12 +284,12 @@ torchrun \
   --nproc_per_node=4 \
   --master_addr=localhost \
   --master_port=9842 \
-  main_mar.py \
+  main_ebm.py \
   --run_name test-step \
   --img_size 256 \
   --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type pure_diffusion \
-  --model pure_diffusion_base \
+  --model_type ebm \
+  --model ebm_base \
   --epochs 20 \
   --warmup_epochs 1 \
   --use_energy \

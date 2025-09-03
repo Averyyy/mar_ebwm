@@ -103,8 +103,8 @@ def train_one_epoch(model, vae,
 
         # forward
         with torch.amp.autocast('cuda', dtype=train_dtype):
-            # Handle wandb MSE-only logging for pure_diffusion model
-            if (args.model_type == "pure_diffusion" and 
+            # Handle wandb MSE-only logging for ebm model
+            if (args.model_type == "ebm" and 
                 hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
                 loss_result = model(x, labels, return_loss_dict=True)
                 loss = loss_result['total_loss'] / accum_steps
@@ -153,11 +153,7 @@ def train_one_epoch(model, vae,
         
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
-        if args.model_type == "debt":
-            metric_logger.update(mcmc_step_size=model.module.alpha.item())
-        elif hasattr(model.module, "use_energy_loss") and model.module.use_energy_loss:
-            metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
-        elif args.model_type == "pure_diffusion" and hasattr(args, 'use_energy') and args.use_energy and hasattr(model.module, "alpha"):
+        if args.model_type == "ebm" and hasattr(args, 'use_energy') and args.use_energy and hasattr(model.module, "alpha"):
             metric_logger.update(mcmc_step_size=model.module.alpha.item())
 
         loss_value_reduce = misc.all_reduce_mean(avg_loss if batch_count == 0 else loss_value)
@@ -293,9 +289,9 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
         lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
         
         # Forward pass with current batch
-        with torch.amp.autocast('cuda', dtype=train_dtype):
-            # Handle wandb MSE-only logging for pure_diffusion model
-            if (args.model_type == "pure_diffusion" and 
+        with torch.amp.autocast('cuda', dtype='bf16'):
+            # Handle wandb MSE-only logging for ebm model
+            if (args.model_type == "ebm" and 
                 hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
                 loss_result = model(x, labels, return_loss_dict=True)
                 loss = loss_result['total_loss'] / accum_steps
@@ -349,11 +345,7 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
         metric_logger.update(lr=lr)
         
         # Update MCMC step size metrics
-        if args.model_type == "debt":
-            metric_logger.update(mcmc_step_size=model.module.alpha.item())
-        elif hasattr(model.module, "use_energy_loss") and model.module.use_energy_loss:
-            metric_logger.update(mcmc_step_size=model.module.energy_mlp.alpha.item())
-        elif args.model_type == "pure_diffusion" and hasattr(args, 'use_energy') and args.use_energy and hasattr(model.module, "alpha"):
+        if args.model_type == "ebm" and hasattr(args, 'use_energy') and args.use_energy and hasattr(model.module, "alpha"):
             metric_logger.update(mcmc_step_size=model.module.alpha.item())
 
         # Logging
@@ -523,7 +515,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
     # compute FID and IS
     if log_writer is not None:
         # Check if we should use FID stats file (for any image size)
-        fid_stats_file_path = getattr(args, 'fid_stats_file', 'fid_stats/adm_in256_stats.npz')
+        fid_stats_file_path = getattr(args, 'fid_stats_file', 'util/fid_stats/adm_in256_stats.npz')
         use_fid_stats = getattr(args, 'use_fid_stats', False)
         
         if use_fid_stats and os.path.exists(fid_stats_file_path):
