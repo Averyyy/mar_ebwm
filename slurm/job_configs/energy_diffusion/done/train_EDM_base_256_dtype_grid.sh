@@ -1,8 +1,14 @@
 #SBATCH --job-name=EDM-base-lr-search
 #SBATCH --array=0-2
-#SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm/EDM-base-lr-search/%A/EDM-base-%a.out
+#SBATCH --output=logs/slurm/EDM-base-lr-search/%A/EDM-base-%a.out
 #SBATCH --time=48:00:00
 #SBATCH --gpus-per-node=2
+
+# --- Environment Setup ---
+# Set these variables for your system:
+export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
+export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
+export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
 
 
 
@@ -33,7 +39,7 @@ auxiliary_eval_dtypes=${auxiliary_evals[$task_id]}
 # --- Setup ---
 module load cuda/12.6.1
 source activate mar_gh200
-cd /work/hdd/bdta/aqian1/mar_ebwm
+cd ${REPO_ROOT}
 
 # --- Parameters (adapted from 256px config) ---
 NUM_GPUS=2
@@ -56,7 +62,7 @@ EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE * GRAD_ACCU * NUM_GPUS))
 
 # --- Base Run Name and Output Dir ---
 BASE_RUN_NAME="EDM-256-base-step_${MCMC_STEP_SIZE}-lr${BLR}-timesteps${DIFFUSION_TIMESTEPS}-bz${EFFECTIVE_BATCH_SIZE}-epo${EPOCHES}-c1k-train_${train_dtype}"
-BASE_OUTPUT_DIR="/work/hdd/bdta/aqian1/mar_ebwm/output/${BASE_RUN_NAME}"
+BASE_OUTPUT_DIR="${REPO_ROOT}/output/${BASE_RUN_NAME}"
 
 # --- Log Parameters ---
 echo "--- Starting Energy Diffusion 256px Training with Dtype Grid Evaluation job ${SLURM_ARRAY_TASK_ID} ---"
@@ -104,7 +110,7 @@ torchrun \
   --num_workers 16 \
   --blr ${BLR} \
   --use_cached \
-  --cached_path /work/nvme/bdta/aqian1/data/cached-imagenet1k-256-ptshard-64 \
+  --cached_path ${CACHE_ROOT}/cached-imagenet1k-256-ptshard-64 \
   --cached_format ptshard \
   --output_dir ${BASE_OUTPUT_DIR} \
   --preview \
@@ -114,7 +120,7 @@ torchrun \
   --eval_freq 5 \
   --use_fid_stats \
   --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset /work/nvme/belh/aqian1/imagenet-1k/val \
+  --eval_real_dataset ${CACHE_ROOT}/imagenet-1k/val \
   --num_sampling_steps ${NUM_EVAL_STEPS} \
   --eval_bsz ${EVAL_BATCH_SIZE} \
   --num_images ${NUM_EVAL_IMAGES} \
@@ -123,6 +129,6 @@ torchrun \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 5 \
-  --val_data_path /work/nvme/belh/aqian1/imagenet-1k/val
+  --val_data_path ${CACHE_ROOT}/imagenet-1k/val
 
 echo "--- Energy Diffusion 256px Dtype Grid job ${SLURM_ARRAY_TASK_ID} completed ---"

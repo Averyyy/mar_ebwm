@@ -134,9 +134,9 @@ def main():
     global processed_files, total_files, error_count, start_time
     
     parser = argparse.ArgumentParser(description='Resize ImageNet dataset from 256x256 to 64x64')
-    parser.add_argument('--src_dir', default='/work/nvme/belh/aqian1/imagenet-1k/',
+    parser.add_argument('--src_dir', default='./data/imagenet/',
                         help='Source ImageNet directory')
-    parser.add_argument('--dst_dir', default='/work/hdd/bdta/aqian1/data/imagenet-1k-64/',
+    parser.add_argument('--dst_dir', default='./data/imagenet-1k-64/',
                         help='Destination directory')
     parser.add_argument('--num_workers', type=int, default=min(32, cpu_count()),
                         help='Number of worker processes')

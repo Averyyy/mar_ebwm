@@ -68,6 +68,9 @@ Cache format:
 
 check `slurm/job_configs/cache_latents.sh`
 
+### Note
+If you are using slurm files, remember to change your environment variables on the top of every slurm file you are using.
+Check all of path before you run! Remember to cache correctly in the correct path if you are using `--use_cached`.
 
 ### Training
 

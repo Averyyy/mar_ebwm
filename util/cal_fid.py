@@ -18,8 +18,9 @@ def resize_images(src_dir, dst_dir, size=(64, 64)):
                     img.save(dst_path, format='PNG')
 
 if __name__ == '__main__':
-    src_root = '/work/nvme/belh/aqian1/imagenet-1k'
-    resized_root = '/work/hdd/bdta/aqian1/mar_ebwm/data/imagenet-1k-64'
+    # TODO: Update these paths for your system
+    src_root = '/work/nvme/belh/aqian1/imagenet-1k'  # Path to your ImageNet dataset
+    resized_root = '/work/hdd/bdta/aqian1/mar_ebwm/data/imagenet-1k-64'  # Path to save resized images
     stats_file = 'imagenet64_stats.npz'
 
     print(f"▶️ 64 resize\n   {resized_root}")

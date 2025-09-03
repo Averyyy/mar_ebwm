@@ -1,8 +1,14 @@
 #SBATCH --job-name=EDM-base-bz-test
 #SBATCH --array=0-0
-#SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm/EDM-base-bztest/1024/%A/EDM-base-%a.out
+#SBATCH --output=logs/slurm/EDM-base-bztest/1024/%A/EDM-base-%a.out
 #SBATCH --time=48:00:00
 #SBATCH --gpus-per-node=4
+
+# --- Environment Setup ---
+# Set these variables for your system:
+export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
+export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
+export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
 
 
 
@@ -36,7 +42,7 @@ learning_rate=${learning_rates[$lr_idx]}
 # --- Setup ---
 module load cuda/12.6.1
 source activate mar_gh200
-cd /work/hdd/bdta/aqian1/mar_ebwm
+cd ${REPO_ROOT}
 
 # --- Parameters ---
 NUM_GPUS=4
@@ -59,7 +65,7 @@ EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE * GRAD_ACCU * NUM_GPUS))
 
 # --- Run Name and Output Dir ---
 RUN_NAME="EDM-256-base-lr${BLR}-timesteps${DIFFUSION_TIMESTEPS}-bz${EFFECTIVE_BATCH_SIZE}-epo${EPOCHES}-c1k"
-OUTPUT_DIR="/work/hdd/bdta/aqian1/mar_ebwm/output/${RUN_NAME}"
+OUTPUT_DIR="${REPO_ROOT}/output/${RUN_NAME}"
 
 # --- Log Parameters ---
 echo "--- Starting Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} ---"
@@ -101,7 +107,7 @@ torchrun \
   --num_workers 8 \
   --blr ${BLR} \
   --use_cached \
-  --cached_path /work/nvme/bdta/aqian1/data/cached-imagenet1k-256-ptshard-16 \
+  --cached_path ${CACHE_ROOT}/cached-imagenet1k-256-ptshard-16 \
   --cached_format ptshard \
   --output_dir ${OUTPUT_DIR} \
   --preview \
@@ -110,7 +116,7 @@ torchrun \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 20 \
-  --val_data_path /work/nvme/belh/aqian1/imagenet-1k/val
+  --val_data_path ${CACHE_ROOT}/imagenet-1k/val
 
 
 echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
@@ -122,7 +128,7 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
   # --eval_freq 20 \
   # --use_fid_stats \
   # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  # --eval_real_dataset /work/nvme/belh/aqian1/imagenet-1k/val \
+  # --eval_real_dataset ${DATA_ROOT}/imagenet/val \
   # --num_sampling_steps ${NUM_EVAL_STEPS} \
   # --eval_bsz ${EVAL_BATCH_SIZE} \
   # --num_images ${NUM_EVAL_IMAGES} \
@@ -151,10 +157,10 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
 #   --num_workers 8 \
 #   --blr 3e-6 \
 #   --use_cached \
-#   --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64-ptshard-c7 \
+#   --cached_path ${DATA_ROOT}/cached-imagenet1k-64-ptshard-c7 \
 #   --cached_format ptshard \
-#   --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/test-loggging \
+#   --output_dir ${REPO_ROOT}/output/test-loggging \
 #   --val \
 #   --val_batch_size 128 \
 #   --val_freq 1 \
-#   --val_data_path /work/hdd/bdta/aqian1/data/val-64-c7
+#   --val_data_path ${DATA_ROOT}/val-64-c7

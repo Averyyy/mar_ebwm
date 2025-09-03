@@ -8,7 +8,9 @@ import copy
 
 # Add the project root to path
 import sys
-sys.path.append('/work/hdd/bdta/aqian1/mar_ebwm')
+# Add the repository root to the Python path
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from models.vae import AutoencoderKL
 from models import mar
@@ -101,10 +103,10 @@ def save_comparison_results(tokens1, tokens2, images1, images2, output_dir, pref
 def main():
     parser = argparse.ArgumentParser(description='Compare two model checkpoints')
     parser.add_argument('--checkpoint1', type=str, 
-                        default='/work/hdd/bdta/aqian1/mar_ebwm/output/mar-base-energy-a-0.01-m-1/checkpoint-last.pth',
+                        default='./output/mar-base-energy-a-0.01-m-1/checkpoint-last.pth',
                         help='Path to first checkpoint')
     parser.add_argument('--checkpoint2', type=str,
-                        default='/work/hdd/bdta/aqian1/mar_ebwm/output/mar-base-energy-lr_1e-4-alpha_3-mult_9/checkpoint-last.pth',
+                        default='./output/mar-base-energy-lr_1e-4-alpha_3-mult_9/checkpoint-last.pth',
                         help='Path to second checkpoint')
     parser.add_argument('--output_dir', type=str, default='./checkpoint_comparison',
                         help='Output directory for comparison results')
@@ -133,7 +135,7 @@ def main():
     vae = AutoencoderKL(
         embed_dim=16,
         ch_mult=(1, 1, 2, 2, 4),
-        ckpt_path='/work/hdd/bdta/aqian1/mar_ebwm/pretrained_models/vae/kl16.ckpt'
+        ckpt_path='./pretrained_models/vae/kl16.ckpt'
     ).to(device).eval()
     
     # Initialize model

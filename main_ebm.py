@@ -204,7 +204,7 @@ def get_args_parser():
                         help='only do preview generation, skip training and wandb initialization')
     
     parser.add_argument('--val_data_path',
-                        default='/work/nvme/belh/aqian1/imagenet-1k/val',
+                        default='./data/imagenet-1k/val',
                         type=str, help='path to ImageNet val')
     parser.add_argument('--val_batch_size', default=64, type=int)
     parser.add_argument('--val_freq',        default=1,  type=int,

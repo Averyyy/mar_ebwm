@@ -1,7 +1,7 @@
 import os
 from PIL import Image
 
-root_dir = '/work/hdd/bdta/aqian1/data/val-64-c7/'
+root_dir = '/work/hdd/bdta/aqian1/data/val-64-c7/'  # TODO: Update this path for your system
 target_size = (64, 64)
 
 print(f"Searching for images in {root_dir}...")

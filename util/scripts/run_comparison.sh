@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Activate environment
-source activate mar_gh200
+source activate ebm_gh200
 
 # Change to project directory
 cd /work/hdd/bdta/aqian1/mar_ebwm

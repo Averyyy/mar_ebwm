@@ -1,9 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=EDM-preview-mcmc
 #SBATCH --array=0-9
-#SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm/EDM-preview-mcmc/%A/EDM-preview-%a.out
+#SBATCH --output=logs/slurm/EDM-preview-mcmc/%A/EDM-preview-%a.out
 #SBATCH --time=00:30:00
 #SBATCH --gpus-per-node=1
+
+# --- Environment Setup ---
+# Set these variables for your system:
+export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
+export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
+export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
 
 # --- Grid Search Parameters (MCMC step sizes to test) ---
 mcmc_steps=(1e-7 1e-6 1e-5 1e-3 1e-2 1e-1 1.0 100 1000 10000)
@@ -27,8 +33,8 @@ mcmc_step_size=${mcmc_steps[$task_id]}
 
 # --- Setup ---
 module load cuda/12.6.1
-source activate mar_gh200
-cd /work/hdd/bdta/aqian1/mar_ebwm
+source activate ebm_gh200
+cd ${REPO_ROOT}
 
 # --- Parameters ---
 MODEL_TYPE=ebm
@@ -37,8 +43,8 @@ IMG_SIZE=256
 DIFFUSION_TIMESTEPS=500
 
 # --- Checkpoint to test (CHANGE THIS PATH) ---
-CHECKPOINT_PATH="/work/hdd/bdta/aqian1/mar_ebwm/output/EDM-256-base-lr3e-6-timesteps500-bz256-epo320-c1k"
-TEST_OUTPUT_DIR="/work/hdd/bdta/aqian1/mar_ebwm/output/preview-test-mcmc${mcmc_step_size}"
+CHECKPOINT_PATH="${REPO_ROOT}/output/EDM-256-base-lr3e-6-timesteps500-bz256-epo320-c1k"
+TEST_OUTPUT_DIR="${REPO_ROOT}/output/preview-test-mcmc${mcmc_step_size}"
 
 # --- Log Parameters ---
 echo "--- Starting MCMC Step Size Preview Test ${SLURM_ARRAY_TASK_ID} ---"
@@ -76,24 +82,24 @@ torchrun \
 echo "--- MCMC Step Size Preview Test ${SLURM_ARRAY_TASK_ID} completed ---"
 
 
-torchrun \
-  --nproc_per_node=1 \
-  --master_addr=localhost \
-  --master_port=7638 \
-  main_ebm.py \
-  --img_size 256 \
-  --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type ebm \
-  --model ebm_base \
-  --use_energy \
-  --use_innerloop_opt \
-  --mcmc_step_size 1e-10 \
-  --energy_grad_multiplier 1 \
-  --diffusion_timesteps 500 \
-  --batch_size 16 \
-  --num_workers 16 \
-  --syn_dataloader \
-  --resume /work/hdd/bdta/aqian1/mar_ebwm/output/EDM-256-base-lr3e-6-timesteps500-bz256-epo320-c1k \
-  --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/preview-test-mcmc \
-  --preview_only \
-  --preview_labels 0,1,2,3,430,485,605,726,850
+# torchrun \
+#   --nproc_per_node=1 \
+#   --master_addr=localhost \
+#   --master_port=7638 \
+#   main_ebm.py \
+#   --img_size 256 \
+#   --vae_path pretrained_models/vae/kl16.ckpt \
+#   --model_type ebm \
+#   --model ebm_base \
+#   --use_energy \
+#   --use_innerloop_opt \
+#   --mcmc_step_size 1e-10 \
+#   --energy_grad_multiplier 1 \
+#   --diffusion_timesteps 500 \
+#   --batch_size 16 \
+#   --num_workers 16 \
+#   --syn_dataloader \
+#   --resume /work/hdd/bdta/aqian1/mar_ebwm/output/EDM-256-base-lr3e-6-timesteps500-bz256-epo320-c1k \
+#   --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/preview-test-mcmc \
+#   --preview_only \
+#   --preview_labels 0,1,2,3,430,485,605,726,850

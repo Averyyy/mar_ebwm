@@ -1,8 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=standard-diffusion
 #SBATCH --array=0-0
-#SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm/energy-diffusion/%A/standard-diffusion-grid-%a.out
+#SBATCH --output=${REPO_ROOT}/logs/slurm/energy-diffusion/%A/standard-diffusion-grid-%a.out
 #SBATCH --time=48:00:00
+
+# --- Environment Setup ---
+# Set these variables for your system:
+export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
+export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
+export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
 
 
 # --- Grid Search Parameters ---
@@ -14,8 +20,8 @@ multiplier=$(echo "${step_size} * 3" | bc -l)
 
 # --- Setup ---
 module load cuda/12.6.1
-source activate mar_gh200
-cd /work/hdd/bdta/aqian1/mar_ebwm
+source activate ebm_gh200
+cd ${REPO_ROOT}
 
 # --- Parameters ---
 BLR=9e-6
@@ -29,7 +35,7 @@ IMG_SIZE=256
 
 # --- Run Name and Output Dir ---
 RUN_NAME="standard-diffusion-small-256-bz${BATCH_SIZE}-lr_${BLR}-epo${EPOCHES}"
-OUTPUT_DIR="/work/hdd/bdta/aqian1/mar_ebwm/output/${RUN_NAME}"
+OUTPUT_DIR="${REPO_ROOT}/output/${RUN_NAME}"
 
 # --- Log Parameters ---
 echo "--- Starting Standard Diffusion job ${SLURM_ARRAY_TASK_ID} ---"
@@ -62,7 +68,7 @@ torchrun \
   --lr_schedule cosine \
   --use_cached \
   --cached_format pt \
-  --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-train-256-pt \
+  --cached_path ${DATA_ROOT}/cached-imagenet1k-train-256-pt \
   --output_dir ${OUTPUT_DIR} \
   --seed 42 \
   --preview \
@@ -70,13 +76,13 @@ torchrun \
   --online_eval \
   --eval_freq 50 \
   --use_fid_stats \
-  --eval_real_dataset /work/nvme/belh/aqian1/imagenet-1k/val \
+  --eval_real_dataset ${CACHE_ROOT}/imagenet-1k/val \
   --num_sampling_steps ${NUM_EVAL_STEPS} \
   --eval_bsz 128 \
   --num_images ${NUM_EVAL_IMAGES} \
   --val \
   --val_batch_size 256 \
-  --val_data_path /work/nvme/belh/aqian1/imagenet-1k/val
+  --val_data_path ${CACHE_ROOT}/imagenet-1k/val
 
 
 echo "--- Standard Diffusion job ${SLURM_ARRAY_TASK_ID} completed ---"

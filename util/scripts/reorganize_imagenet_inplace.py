@@ -204,7 +204,7 @@ def reorganize_dataset_inplace(imagenet_root, dataset_type, num_workers=32):
 def main():
     parser = argparse.ArgumentParser(description='In-place reorganize ImageNet datasets')
     parser.add_argument('--imagenet_root', 
-                       default='/work/nvme/belh/aqian1/imagenet-1k',
+                       default='./data/imagenet-1k',
                        help='Root ImageNet directory')
     parser.add_argument('--num_workers', type=int, default=32,
                        help='Number of parallel workers')

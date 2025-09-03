@@ -1,8 +1,14 @@
 #SBATCH --job-name=EDM-xlarge-lr-search
 #SBATCH --array=0-2
-#SBATCH --output=/work/hdd/bdta/aqian1/mar_ebwm/logs/slurm/EDM-xlarge-lr-search/%A/EDM-xlarge-%a.out
+#SBATCH --output=logs/slurm/EDM-xlarge-lr-search/%A/EDM-xlarge-%a.out
 #SBATCH --time=48:00:00
 #SBATCH --gpus-per-node=1
+
+# --- Environment Setup ---
+# Set these variables for your system:
+export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
+export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
+export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
 
 
 
@@ -36,7 +42,7 @@ learning_rate=${learning_rates[$lr_idx]}
 # --- Setup ---
 module load cuda/12.6.1
 source activate mar_gh200
-cd /work/hdd/bdta/aqian1/mar_ebwm
+cd ${REPO_ROOT}
 
 # --- Parameters ---
 NUM_GPUS=1
@@ -58,7 +64,7 @@ EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE * GRAD_ACCU * NUM_GPUS))
 
 # --- Run Name and Output Dir ---
 RUN_NAME="EDM-xlarge-step_${step_size}-lr${BLR}-timesteps${DIFFUSION_TIMESTEPS}-bz${EFFECTIVE_BATCH_SIZE}-epo${EPOCHES}-c1k"
-OUTPUT_DIR="/work/hdd/bdta/aqian1/mar_ebwm/output/${RUN_NAME}"
+OUTPUT_DIR="${REPO_ROOT}/output/${RUN_NAME}"
 
 # --- Log Parameters ---
 echo "--- Starting Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} ---"
@@ -100,7 +106,7 @@ torchrun \
   --num_workers 32 \
   --blr ${BLR} \
   --use_cached \
-  --cached_path /work/nvme/bdta/aqian1/data/cached-imagenet1k-64-ptshard-32 \
+  --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
   --output_dir ${OUTPUT_DIR} \
   --preview \
@@ -110,14 +116,14 @@ torchrun \
   --eval_freq 50 \
   --use_fid_stats \
   --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset /work/hdd/bdta/aqian1/data/imagenet-1k-64/val \
+  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
   --num_sampling_steps ${NUM_EVAL_STEPS} \
   --eval_bsz 256 \
   --num_images ${NUM_EVAL_IMAGES} \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 25 \
-  --val_data_path /work/hdd/bdta/aqian1/data/imagenet-1k-64/val
+  --val_data_path ${DATA_ROOT}/imagenet-1k-64/val
 
 
 echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
