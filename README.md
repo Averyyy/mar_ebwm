@@ -43,12 +43,13 @@ git clone git@github.com:Averyyy/mar_ebwm.git
 cd mar_ebwm
 ```
 
-A suitable [conda](https://conda.io/) environment named `ebm_gh200` can be created and activated with:
-
+Setup the environment (make sure you have [conda](https://conda.io/) installed):
+If you are on a gh200 gpu, you can use the following command to create an environment called `ebm_gh200`: 
 ```
-conda env create -f environment.yaml
-conda activate ebm_gh200
+chmod +x env_setup/setup_gh200.sh
+./env_setup/setup_gh200.sh
 ```
+Warning: running the script would remove & reinstall your current environment called `ebm_gh200`.
 
 Download pre-trained VAE and energy diffusion models:
 

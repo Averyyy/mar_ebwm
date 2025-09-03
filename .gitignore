@@ -1,6 +1,6 @@
 pretrained_models/
 data/
-__pycache__/
+__pycache__
 output/
 output_dir/
 wandb/
