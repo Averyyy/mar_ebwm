@@ -56,7 +56,7 @@ def get_args_parser():
     parser.add_argument('--img_size', default=256, type=int,
                         help='images input size')
     parser.add_argument('--vae_path', default="pretrained_models/vae/kl16.ckpt", type=str,
-                        help='images input size')
+                        help='VAE checkpoint path')
     parser.add_argument('--vae_embed_dim', default=16, type=int,
                         help='vae output embedding dimension')
     parser.add_argument('--vae_stride', default=16, type=int,
@@ -217,12 +217,12 @@ def get_args_parser():
                         help='Debug mode: feed half ground-truth tokens then generate the rest')
     
     # Dtype selection
-    parser.add_argument('--train_dtype', default='bfloat16', type=str, 
+    parser.add_argument('--train_dtype', default='bf16', type=str, 
                         choices=['fp16', 'bf16', 'fp32'],
-                        help='Data type for training (default: bfloat16)')
-    parser.add_argument('--eval_dtype', default='bfloat16', type=str,
+                        help='Data type for training (default: bf16)')
+    parser.add_argument('--eval_dtype', default='bf16', type=str,
                         choices=['fp16', 'bf16', 'fp32'], 
-                        help='Data type for evaluation (default: bfloat16)')
+                        help='Data type for evaluation (default: bf16)')
     parser.add_argument('--auxiliary_eval_dtypes', type=str, default='',
                         help='Comma-separated list of additional eval dtypes to run with separate wandb runs (e.g., "fp16,fp32")')
 
@@ -557,7 +557,7 @@ def main(args):
                 for line in f:
                     k, v = line.strip().split(None, 1)
                     cls_map[int(k)] = v
-            print(f"☑️ Loaded {len(cls_map)} class id to name mappings")
+            print(f"✅ Loaded {len(cls_map)} class id to name mappings")
         except Exception as e:
             print(f"❌ Error loading class id to name mapping: {e}")
             cls_map = {}
@@ -565,16 +565,12 @@ def main(args):
         cls_map = {}
     class_id_to_name = cls_map
 
-    # ------------------------------------------------------------
-    # Debug: ground-truth half sampling preview (no training)
-    # ------------------------------------------------------------
+    
     if args.test_half_sampling:
         log_preview_half(model_without_ddp, vae, data_loader_train, args, epoch=args.start_epoch, class_id_to_name=class_id_to_name)
         return
 
-    # ------------------------------------------------------------
-    # Preview only mode
-    # ------------------------------------------------------------
+    
     if args.preview_only:
         print("🎨 Preview only mode - generating preview images and exiting")
         # Force enable preview flag for log_preview function to work
