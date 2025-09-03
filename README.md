@@ -1,132 +1,85 @@
-# Energy-Diffusion Outscales Diffusion <br><sub>Official PyTorch Implementation</sub>
+# Energy-Diffusion Outscales Diffusion
+_Official PyTorch Implementation_
 
-[![arXiv](#TODO)&nbsp;
+<!-- arxiv field -->
 
-This is a PyTorch/GPU implementation of the paper [Energy-Diffusion Outscales Diffusion](#TODO) (#TODO ICLRbalabala):
+This is a PyTorch/GPU implementation of the paper [Energy-Diffusion Outscales Diffusion](#TODO) (#TODO ICLRbalabala).
 
 This repo contains:
 
-* 🪐 A simple PyTorch implementation of [Standard & Energy diffusion](models/ebm.py)
-* ⚡️ Pre-trained class-conditional energy diffusion models trained on ImageNet 64x64 & 256x256
+- 🪐 A simple PyTorch implementation of [Standard & Energy diffusion](models/ebm.py)
+- ⚡️ Pre-trained class-conditional energy diffusion models trained on ImageNet 64x64 & 256x256
 
-* 🛸 An Energy diffusion [training and evaluation script](main_ebm.py) using PyTorch DDP
-* 👏 [Credit] A lot of training pipeline codes are borrowed from [MAR](https://github.com/LTH14/mar), huge thanks to the authors!
-
+## Table of Contents
+- [Preparation](#preparation)
+- [Caching VAE Latents](#optional-caching-vae-latents)
+- [Training](#training)
+- [Evaluation (ImageNet 256x256)](#evaluation-imagenet-256x256)
+- [Directory explanation](#directory-explanation)
+- [Contact](#contact)
 
 ## Preparation
 
 ### Dataset
-Download [ImageNet](http://image-net.org/download) dataset, and place it in your `IMAGENET_PATH`.
+Download [ImageNet](http://image-net.org/download) and place it in your `IMAGENET_PATH`.
 
 ### Installation
 
 Download the code:
-```
+```bash
 git clone git@github.com:Averyyy/mar_ebwm.git
 cd mar_ebwm
 ```
 
-Setup the environment (make sure you have [conda](https://conda.io/) installed):
-If you are on a gh200 gpu, you can use the following command to create an environment called `ebm_gh200`: 
-```
+Set up the environment (make sure you have [conda](https://conda.io/) installed).
+If you are on a GH200 GPU, you can use the following command to create an environment called `ebm_gh200`:
+```bash
 chmod +x env_setup/setup_gh200.sh
 ./env_setup/setup_gh200.sh
 ```
-Warning: running the script would remove & reinstall your current environment called `ebm_gh200`.
+> Warning: running the script will remove & reinstall your current environment named `ebm_gh200`.
+> Theoretically, the environment should work on CUDA versions <= 12.6.1. (Tested on A100 GPUs.)
 
 Download pre-trained VAE and energy diffusion models:
-
-```
+```bash
 python util/download.py
 ```
 
 For convenience, our pre-trained EBM models can be downloaded directly here as well:
 
-| EBM Model                                                              | FID-50K | Inception Score | #params | 
-|------------------------------------------------------------------------|---------|-----------------|---------|
-| [EBM-Base](#TODO) | #TODO    | #TODO           | 130M    |
-| [EBM-Large](#TODO) | #TODO    | #TODO           | 458M    |
-| [EBM-XLarge](#TODO) | #TODO    | #TODO           | 675M    |
+| EBM Model | FID-50K | Inception Score | #params |
+|---|---|---|---|
+| [EBM-Base](#TODO) | #TODO | #TODO | 130M |
+| [EBM-Large](#TODO) | #TODO | #TODO | 458M |
+| [EBM-XLarge](#TODO) | #TODO | #TODO | 675M |
 
 ### (Optional) Caching VAE Latents
 
-Given that our data augmentation consists of simple center cropping and random flipping, 
-the VAE latents can be pre-computed and saved to `CACHED_PATH` to save computations during EBM training:
+Given that our data augmentation consists of simple center cropping and random flipping, the VAE latents can be pre-computed and saved to `CACHED_PATH` to save computations during EBM training:
 
-```
+```bash
 torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 \
 main_cache.py \
 --img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 \
 --batch_size 128 \
---data_path ${IMAGENET_PATH} --cached_path ${CACHED_PATH}
+--data_path ${IMAGENET_PATH} --cached_path ${CACHED_PATH} \
 --cache_format ptshard --cache_shard_size 64
 ```
 
 Cache format:
-1. `npz`: default cache format. However, it might influence performance during dataloading on gh200 gpus.
-2. `ptshard`: *Recommended* a shard format that is more efficient for dataloading on gh200 gpus.
+1. `npz`: default cache format. However, it might influence performance during dataloading on GH200 GPUs.
+2. `ptshard`: recommended shard format that is more efficient for dataloading on GH200 GPUs.
 
-check `slurm/job_configs/cache_latents.sh`
+See `slurm/job_configs/cache_latents.sh`.
 
 ### Note
-If you are using slurm files, remember to change your environment variables on the top of every slurm file you are using.
-Check all of path before you run! Remember to cache correctly in the correct path if you are using `--use_cached`.
+If you are using Slurm files, remember to change your environment variables at the top of every Slurm file you use.
+Check all paths before you run! Remember to cache in the correct path if you are using `--use_cached`.
 
-### Training
+## Training
 
-## Tips & explanations:
-A. Training pipeline:
-  1. Wandb logging: 
-    a. Install and login to wandb in your terminal, then in `util/misc.py`, in function init_wandb, set `project` param in `wandb.init` to `energy-diffusion`. 
-    b. If no run_name is specified, then the run will not be uploaded to wandb web. 
-    c. There is a resume logic implemented by default. Just resume from the directory the wandb id and ckpt would be loaded and continue the same wandb logging (if exist).
-    d. Preview: set preview labels/freq, There would be preview images shown on the wandb run.
-    e. Other features: wandb watch: watch param/gradients to check errors; system section to check gpu memory and utilization;
-  2. Caching:
-    a. Cache format: 
-      - `npz`: default cache format. However, it might influence performance during dataloading on gh200 gpus.
-      - `ptshard`: *Recommended* a shard format that is more efficient for dataloading on gh200 gpus. Improves GPU utilization. Also, when using this format, please specify `--cache_format` in the training script.
-    b. Resizing: Given a 256 image dataset, just set effective image size to n (eg. 64) to cache a n by n dataset. 
-    c. Check `slurm/job_configs/cache_latents.sh` for the script to cache the VAE latents.
-    d. Recommended cache location: on nvme/. Recommended cache size for ptshard: 64.
-    e. For caching scripts, please check `slurm/job_configs/cache_latents.sh` for types of script to cache the VAE latents.
-  3. Evaluation:
-  A. Metrics
-    All of the metrics are calculated using torch_fidelity. Specify `--eval_real_dataset` to evaluate on selected dataset.
-      a. FID: To save a cached fid_stats on selected dataset (that saves time), please check out `util/scripts/compute_fid_stats_64.py` for the script to compute the fid_stats. (It should work for every dataset, just check args in the script for image size, etc.). To specify existing fid_stat, please use `--use_fid_stats` and `--fid_stats_file` to specify the path to the fid_stats.
-      b. Other metrics includes: recall, prevision, IS, KID (std/mean), inception score, PRC, etc. They rely solely on eval_real_dataset.
-      c. Based on experiments, eval_bsz should be set to 1/4 of your training batchsize.
-      d. You should set num_images the integer that is divisible by dataset classes. eg. for imagenet-1k, it should be 1000, 2000, etc.
-      e. `--evaluate` is a flag to enable evaluation for a trained model. If you would like to see the metrics during training, please set `--online_eval` to enable online evaluation. Taking 1000 images for example, for 64 by 64 images the eval time is roughly 8 minutes, for 256 by 256 images the eval time is roughly 2 hours (num_sampling_steps: 250)
-  B. Validation:
-    a. To enable validation, please add `--val` to the training script.
-    b. Validation dataset can be specified by `--val_data_path` (for most cases, it is the same as eval_real_dataset)
-    c. Validation frequency can be specified by `--val_freq` (default is 25).
-    d. Validation batch size can be specified by `--val_batch_size` (You should set it the same as your training batchsize).
-  All of the evaluation data are logged to wandb by the global step (which is also important for resuming wandb).
-
-B. Model (energy diffusion, EDM):
-  1. All of the diffusion models are located in `models/ebm.py`. By default, it is standard diffusion using vanilla DIT. 
-  2. To train any diffusion model, please set `model_type` to `ebm` and `model` to `ebm_base` (or `ebm_large` or `ebm_xlarge`). The default training setting is standard diffusion.
-  3. To train energy diffusion, please set `--use_energy`. Other args explanation:
-    1. `--use_innerloop_opt`: To enable mcmc during sampling process.
-    2. `--mcmc_step_size`: To set the MCMC step size. If `--learnable_mcmc_step_size` is not set, then this would not influence training, just inference.
-    3. `--energy_grad_multiplier`: To set the energy gradient multiplier. (returned gradient * multiplier) default set to 1.
-    4. `--supervise_energy_landscape`: To supervise the energy landscape during training by adding a contrastive loss. This would increase memory/gpu resources usage, and according to our experiments, it would not improve the performance. 
-    5. `--learnable_mcmc_step_size`: To enable learnable mcmc step size by adding a refinement loss that punishes on energy acceptance during mcmc steps. This could improve performance by a little, but it is also very computationally expensive.
-    6. `--log_energy_accept_rate`: To log the energy acceptance rate during training to wandb.
-    7. `--wandb_log_mse_only`: To log only the mse loss to wandb so that we could compare with other model variants.
-    8. `--mcmc_num_steps`: To set the number of mcmc steps during sampling process. Otherwise it is adaptive steps during inference. (which may be slower)
- C. Training:
-    1. When mentioning learning rate, the default meaning the base lr (blr), Real LR is calculated by a blr * eff_batch_size / 256
-    2. Effective batch size is calculated by batch_size * grad_accu * num_gpus. By enabling gradient accumulation, just specify `--grad_accu` to the number of gradient accumulation steps in your args.
-    3. If you are training on a very large batch size (not effective batch size), and getting bumps in GPU utilization between 0% to 100%, please try increasing the `--num_workers`. Eg. batchsize 1024 + `--num_workers 16` would be a good choice. Total number of workers are calculated by num_workers * num_gpus. However, if you are using a small batchsize like 128, then 8 workers per gpu is enough.
-
-
-
-
-Script for the default setting (EDM-Base, 500 diffusion steps, 80 epochs, 128 batchsize, 9e-6 blr):
-```
+Default training command (EDM-Base, 500 diffusion steps, 80 epochs, batch size 128, base LR 9e-6):
+```bash
 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
 main_ebm.py \
   --run_name ${RUN_NAME} \
@@ -154,68 +107,158 @@ main_ebm.py \
   --num_images 1000
 ```
 
+Arguments:
+- `model_type`: to train energy diffusion, set to `ebm`.
+- (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_PATH}`.
+  Training time with cached latents is ~1d11h on 16 H100 GPUs with `--batch_size 128` (nearly 2x faster than without caching). Note this may slightly reduce training speed.
 
-Args explanations: 
-- `model_type`: To train energy diffusion, set to `ebm`.
-- (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_PATH}` to the arguments. 
-Training time with cached latents is ~1d11h on 16 H100 GPUs with `--batch_size 128` (nearly 2x faster than without caching).
-Note that this may slightly reduce training speed.
+## Guides
 
-### Evaluation (ImageNet 256x256)
+### Training pipeline
+1. Wandb logging:
+   - Install and login to wandb in your terminal, then in `util/misc.py`, in function `init_wandb`, set `project` in `wandb.init` to `energy-diffusion`.
+   - If no `run_name` is specified, the run will not be uploaded to wandb web.
+   - Resume logic is implemented by default. Resuming from a directory will load the wandb id and checkpoint and continue the same logging (if it exists).
+   - Preview: set preview labels/frequency to show preview images on the wandb run.
+   - Other features: wandb watch (parameters/gradients), system section (GPU memory and utilization).
+2. Caching:
+   - Cache format: `npz` (default); `ptshard` (recommended for GH200 GPUs; improves GPU utilization). When using `ptshard`, specify `--cache_format`.
+   - Resizing: given a 256 image dataset, set effective image size to n (e.g., 64) to cache an n×n dataset.
+   - See `slurm/job_configs/cache_latents.sh` for scripts to cache VAE latents.
+   - Recommended cache location: NVMe. Recommended `ptshard` shard size: 64.
+3. Evaluation
+   - Metrics: computed using torch_fidelity. Specify `--eval_real_dataset`.
+   - FID: to precompute `fid_stats` on a selected dataset, see `util/scripts/compute_fid_stats_64.py`. To use existing stats, set `--use_fid_stats` and `--fid_stats_file`.
+   - Other metrics: recall, precision, IS, KID (std/mean), PRC, etc. They rely on `--eval_real_dataset`.
+   - Set `eval_bsz` to 1/4 of your training batch size.
+   - Set `num_images` to a value divisible by the number of classes (e.g., for ImageNet-1k: 1000, 2000, ...).
+   - `--evaluate` enables evaluation for a trained model. For metrics during training, set `--online_eval`.
+   - Rough eval time for 1000 images: 64×64 ≈ 8 min; 256×256 ≈ 2 h (num_sampling_steps: 250).
+4. Validation
+   - Enable with `--val`.
+   - Dataset via `--val_data_path` (often same as `--eval_real_dataset`).
+   - Frequency via `--val_freq` (default 25).
+   - Batch size via `--val_batch_size` (match training batch size).
+   - All evaluation data are logged to wandb by the global step (important for resuming).
 
-Evaluate MAR-B (DiffLoss MLP with 6 blocks and a width of 1024 channels, 800 epochs) with classifier-free guidance:
+### Model (energy diffusion, EDM)
+1. All diffusion models are in `models/ebm.py`. By default, standard diffusion uses vanilla DiT.
+2. To train any diffusion model, set `model_type=ebm` and `model` to one of `ebm_base`, `ebm_large`, `ebm_xlarge`.
+3. To train energy diffusion, add `--use_energy`. Other args:
+   - `--use_innerloop_opt`: enable MCMC during sampling.
+   - `--mcmc_step_size`: MCMC step size. If `--learnable_mcmc_step_size` is not set, this affects inference only.
+   - `--energy_grad_multiplier`: multiplies returned energy gradient (default 1).
+   - `--supervise_energy_landscape`: adds a contrastive loss to supervise the landscape. Increases memory/GPU usage; not observed to improve performance.
+   - `--learnable_mcmc_step_size`: learnable step size via a refinement loss penalizing energy acceptance; slightly improves performance but is computationally expensive.
+   - `--log_energy_accept_rate`: logs energy acceptance rate to wandb.
+   - `--wandb_log_mse_only`: logs only MSE loss to wandb for comparison across variants.
+   - `--mcmc_num_steps`: fixed number of MCMC steps during sampling; otherwise adaptive (may be slower).
+
+### Training tips
+1. Learning rate: `blr` denotes base LR; real LR = `blr * eff_batch_size / 256`.
+2. Effective batch size = `batch_size * grad_accu * num_gpus`. Enable gradient accumulation via `--grad_accu`.
+3. If GPU utilization oscillates with very large batch sizes, try increasing `--num_workers` (e.g., batch size 1024 with `--num_workers 16`). Total workers = `num_workers * num_gpus`. For small batch sizes (e.g., 128), 8 workers per GPU are often enough.
+
+## Evaluation (Energy Diffusion)
+
+We provide a ready-to-run evaluation script that compares two acceptance strategies during inner-loop MCMC optimization:
+1) always accept optimization steps; 2) vanilla accept/reject based on energy.
+
+### Slurm job (recommended)
+Submit the following job (edit paths at the top of the script as needed):
+
+```bash
+bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/done/eval_EDM_compare_accept.sh
 ```
-torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
-main_ebm.py \
---model mar_base --diffloss_d 6 --diffloss_w 1024 \
---eval_bsz 256 --num_images 50000 \
---num_iter 256 --num_sampling_steps 100 --cfg 2.9 --cfg_schedule linear --temperature 1.0 \
---output_dir pretrained_models/mar/mar_base \
---resume pretrained_models/mar/mar_base \
---data_path ${IMAGENET_PATH} --evaluate
+
+Key flags used in the script:
+- `--evaluate`: enable evaluation mode
+- `--use_fid_stats --fid_stats_file`: reuse precomputed FID stats
+- `--eval_real_dataset`: path to the real dataset used for metrics
+- `--num_images`: number of generated images for evaluation (should be divisible by classes)
+- `--eval_bsz`: evaluation batch size
+- `--always_accept_opt_steps`: if set, forces always-accept behavior for inner-loop optimization
+
+### Direct torchrun examples
+
+Always-accept inner-loop optimization:
+```bash
+torchrun \
+  --nproc_per_node=1 \
+  --master_addr=localhost \
+  --master_port=6748 \
+  main_ebm.py \
+  --run_name EDM-eval-s64-step_0.001-diffusion_step-500-c1k-always_accept \
+  --img_size 64 \
+  --vae_path pretrained_models/vae/kl16.ckpt \
+  --model_type ebm \
+  --model ebm_small \
+  --use_energy \
+  --use_innerloop_opt \
+  --always_accept_opt_steps \
+  --mcmc_step_size 0.001 \
+  --use_cached \
+  --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
+  --cached_format ptshard \
+  --data_path ${DATA_ROOT}/imagenet-1k-64 \
+  --diffusion_timesteps 500 \
+  --num_sampling_steps 250 \
+  --evaluate \
+  --use_fid_stats \
+  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  --eval_bsz 256 \
+  --num_images 1000 \
+  --output_dir ${REPO_ROOT}/output/EDM-eval-s64-step_0.001-diffusion_step-500-c1k-always_accept \
+  --resume ${REPO_ROOT}/output/EDM-step_0.001-cl0-rl0-closs0.05-rloss0.1-lr_9e-6-small-64-bz1024-epo2000-c1k
 ```
 
-Evaluate MAR-L (DiffLoss MLP with 8 blocks and a width of 1280 channels, 800 epochs) with classifier-free guidance:
-```
-torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
-main_ebm.py \
---model mar_large --diffloss_d 8 --diffloss_w 1280 \
---eval_bsz 256 --num_images 50000 \
---num_iter 256 --num_sampling_steps 100 --cfg 3.0 --cfg_schedule linear --temperature 1.0 \
---output_dir pretrained_models/mar/mar_large \
---resume pretrained_models/mar/mar_large \
---data_path ${IMAGENET_PATH} --evaluate
+Vanilla accept/reject:
+```bash
+torchrun \
+  --nproc_per_node=1 \
+  --master_addr=localhost \
+  --master_port=7748 \
+  main_ebm.py \
+  --run_name EDM-eval-s64-step_0.001-diffusion_step-500-c1k-vanilla \
+  --img_size 64 \
+  --use_cached \
+  --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
+  --cached_format ptshard \
+  --data_path ${DATA_ROOT}/imagenet-1k-64 \
+  --vae_path pretrained_models/vae/kl16.ckpt \
+  --model_type ebm \
+  --model ebm_small \
+  --use_energy \
+  --use_innerloop_opt \
+  --mcmc_step_size 0.001 \
+  --diffusion_timesteps 500 \
+  --num_sampling_steps 250 \
+  --use_fid_stats \
+  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  --eval_bsz 256 \
+  --num_images 1000 \
+  --output_dir ${REPO_ROOT}/output/EDM-eval-s64-step_0.001-diffusion_step-500-c1k-vanilla \
+  --resume ${REPO_ROOT}/output/EDM-step_0.001-cl0-rl0-closs0.05-rloss0.1-lr_9e-6-small-64-bz1024-epo2000-c1k \
+  --evaluate
 ```
 
-Evaluate MAR-H (DiffLoss MLP with 12 blocks and a width of 1536 channels, 800 epochs) with classifier-free guidance:
-```
-torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
-main_ebm.py \
---model mar_huge --diffloss_d 12 --diffloss_w 1536 \
---eval_bsz 128 --num_images 50000 \
---num_iter 256 --num_sampling_steps 100 --cfg 3.2 --cfg_schedule linear --temperature 1.0 \
---output_dir pretrained_models/mar/mar_huge \
---resume pretrained_models/mar/mar_huge \
---data_path ${IMAGENET_PATH} --evaluate
-```
+You could decrease inference time by reducing the number of mcmc steps during sampling, but it may introduce some performance degradation.
 
-- Set `--cfg 1.0 --temperature 0.95` to evaluate without classifier-free guidance.
-- Generation speed can be significantly increased by reducing the number of autoregressive iterations (e.g., `--num_iter 64`).
-
-## Directory explanation:
-./diffusion: all the diffusion util functions
-./env_setup: scripts for setting up environments (on different systems)
-./models: the models used in the paper, including DiT, EBM, and vae tokenizer
-./output: [ignored] default output folder when you run experiments
-./slurm/job_configs: all the slurm scripts
-./src: torch-fidelity files
-./util/*.py: all the util functions needed in training/inference
-./util/scripts: all the scripts needed for preparing dataset, computing metrics, etc.
-./util/fid_stats: all the fid stats files when evaluating fids. including imagenet1k-256 and imagenet1k-64 stats.
-./main_ebm.py: the main training script for energy diffusion
-./main_cache.py: the main script for caching the vae latents
-./engine.py: the engine for training/inference
-
+## Directory explanation
+- `diffusion`: all diffusion utility functions
+- `env_setup`: scripts for setting up environments (on different systems)
+- `models`: models used in the paper, including DiT, EBM, and VAE tokenizer
+- `output`: [ignored] default output folder for experiments
+- `slurm/job_configs`: all Slurm scripts
+- `src`: torch-fidelity files
+- `util/*.py`: utility functions for training/inference
+- `util/scripts`: scripts for preparing datasets, computing metrics, etc.
+- `util/fid_stats`: FID stats files for evaluation (e.g., ImageNet-1k 256 and 64)
+- `main_ebm.py`: main training script for energy diffusion
+- `main_cache.py`: main script for caching VAE latents
+- `engine.py`: training/inference engine
 
 A large portion of codes in this repo is based on [MAR](https://github.com/LTH14/mar) and [DiT](https://github.com/facebookresearch/DiT).
 
