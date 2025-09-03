@@ -3,7 +3,7 @@
 # Activate environment
 source activate ebm_gh200
 
-# Change to project directory
+# TODO: Change to your project directory!!!!
 cd /work/hdd/bdta/aqian1/mar_ebwm
 
 # Run comparison script

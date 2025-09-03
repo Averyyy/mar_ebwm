@@ -385,7 +385,7 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
                       f"time: {avg_iter_time:.4f}  "
                       f"data: {avg_data_time:.4f}")
             
-            # Use centralized wandb logging (KISS principle)
+            # Use centralized wandb logging
             metric_logger.log_wandb(eta_seconds, avg_iter_time, avg_data_time, global_step + data_iter_step)
 
         # Mark current buffer as used and move to next stream
@@ -577,9 +577,9 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
                 'kid': enable_kid,
                 'prc': enable_prc,
                 'verbose': False,
-                'samples_find_deep': True,  # Enable recursive search for images in subdirectories
-                'samples_resize_and_crop': args.img_size,  # Resize all images to same size
-                'kid_subset_size': kid_subset_size,  # Set subset size for KID calculation
+                'samples_find_deep': True,
+                'samples_resize_and_crop': args.img_size,
+                'kid_subset_size': kid_subset_size,
             }
             
             # Only add input2 and fid_statistics_file if they exist

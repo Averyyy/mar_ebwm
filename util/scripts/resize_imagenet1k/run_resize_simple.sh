@@ -10,6 +10,7 @@ echo "Start time: $(date)"
 # Create logs directory
 mkdir -p logs
 
+# change to you own directory!!!
 nohup python3 resize_imagenet.py \
     --src_dir /work/nvme/belh/aqian1/imagenet-1k/ \
     --dst_dir /work/hdd/bdta/aqian1/data/imagenet-1k-64/ \

@@ -149,7 +149,7 @@ main_ebm.py \
   --output_dir ${OUTPUT_DIR} \
   --online_eval \
   --eval_bsz 32 \
-  --eval_real_dataset /work/nvme/belh/aqian1/imagenet-1k/val \
+  --eval_real_dataset ${EVAL_PATH} \
   --num_sampling_steps 250 \
   --num_images 1000
 ```
