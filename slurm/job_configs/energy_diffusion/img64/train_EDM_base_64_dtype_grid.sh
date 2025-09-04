@@ -1,3 +1,8 @@
+#!/bin/bash
+# ===== PURPOSE: Energy Diffusion Model training on ImageNet-64 with base model and data type grid search =====
+# ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/img64/train_EDM_base_64_dtype_grid.sh =====
+# ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
+
 #SBATCH --job-name=EDM-base-dtype-grid
 #SBATCH --array=0-0
 #SBATCH --output=${REPO_ROOT}/logs/slurm/EDM-base-dtype-grid/%A/EDM-base-dtype-%a.out
@@ -86,7 +91,6 @@ echo "Base Run Name: ${BASE_RUN_NAME}"
 echo "Base Output Dir: ${BASE_OUTPUT_DIR}"
 echo "--------------------"
 
-# --- Training Phase ---
 # --- Training Phase with Auxiliary Evaluations ---
 echo "=== TRAINING WITH AUXILIARY EVALUATIONS ==="
 torchrun \
@@ -94,13 +98,20 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((6758 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
+
   --run_name ${BASE_RUN_NAME} \
+  --output_dir ${BASE_OUTPUT_DIR} \
+
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
+
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --blr ${BLR} \
+
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${MCMC_STEP_SIZE} \
@@ -109,28 +120,35 @@ torchrun \
   --train_dtype ${train_dtype} \
   --eval_dtype ${train_dtype} \
   --auxiliary_eval_dtypes ${auxiliary_eval_dtypes} \
-  --batch_size ${BATCH_SIZE} \
-  --num_workers 32 \
-  --blr ${BLR} \
+
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
-  --output_dir ${BASE_OUTPUT_DIR} \
+  --num_workers 32 \
+
   --preview \
   --preview_interval 25 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
-  --online_eval \
-  --eval_freq 50 \
-  --use_fid_stats \
-  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
-  --num_sampling_steps ${NUM_EVAL_STEPS} \
-  --eval_bsz 256 \
-  --num_images ${NUM_EVAL_IMAGES} \
-  --disable_progress_bar \
+
+
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 25 \
   --val_data_path ${DATA_ROOT}/imagenet-1k-64/val
 
 echo "--- Energy Diffusion Dtype Grid job ${SLURM_ARRAY_TASK_ID} completed ---"
+
+
+# ===== if you want to add online evaluation, uncomment the following lines and paste it back to the training command =====
+
+  # --online_eval \
+  # --eval_freq 50 \
+  # --use_fid_stats \
+  # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  # --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  # --num_sampling_steps ${NUM_EVAL_STEPS} \
+  # --eval_bsz 256 \
+  # --num_images ${NUM_EVAL_IMAGES} \
+
+
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====

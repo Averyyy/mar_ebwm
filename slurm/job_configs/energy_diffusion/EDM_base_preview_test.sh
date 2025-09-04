@@ -5,6 +5,11 @@
 #SBATCH --time=00:30:00
 #SBATCH --gpus-per-node=1
 
+# ===== PURPOSE: Grid search preview test for Energy Diffusion Model with different MCMC step sizes =====
+# ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/EDM_base_preview_test.sh =====
+# ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
+
+
 # --- Environment Setup ---
 # Set these variables for your system:
 export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
@@ -61,45 +66,71 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((7638 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
+  \
   --run_name preview-mcmc-${mcmc_step_size} \
+  --output_dir ${TEST_OUTPUT_DIR} \
+  --resume ${CHECKPOINT_PATH} \
+  \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
+  \
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${mcmc_step_size} \
   --energy_grad_multiplier 1 \
   --diffusion_timesteps ${DIFFUSION_TIMESTEPS} \
+  \
   --batch_size 16 \
   --num_workers 8 \
   --syn_dataloader \
-  --resume ${CHECKPOINT_PATH} \
-  --output_dir ${TEST_OUTPUT_DIR} \
+  \
   --preview_only \
   --preview_labels 0,1,2,3,430,485,605,726,850
 
 echo "--- MCMC Step Size Preview Test ${SLURM_ARRAY_TASK_ID} completed ---"
 
 
+# ===== if you want to add online evaluation, uncomment the following lines and paste it back to the training command =====
+
+  # --online_eval \
+  # --eval_freq 20 \
+  # --use_fid_stats \
+  # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  # --eval_real_dataset ${DATA_ROOT}/imagenet/val \
+  # --num_sampling_steps ${NUM_EVAL_STEPS} \
+  # --eval_bsz ${EVAL_BATCH_SIZE} \
+  # --num_images ${NUM_EVAL_IMAGES} \
+
+
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====
+
 # torchrun \
 #   --nproc_per_node=1 \
 #   --master_addr=localhost \
 #   --master_port=7638 \
 #   main_ebm.py \
+#   \
+#   --run_name test-mcmc \
+#   --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/preview-test-mcmc \
+#   --resume /work/hdd/bdta/aqian1/mar_ebwm/output/EDM-256-base-lr3e-6-timesteps500-bz1024-epo80-c1k \
+#   \
 #   --img_size 256 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
 #   --model_type ebm \
 #   --model ebm_base \
+#   \
 #   --use_energy \
 #   --use_innerloop_opt \
-#   --mcmc_step_size 1e-10 \
+#   --mcmc_step_size 1e-5 \
+#   --mcmc_num_steps 0 \
 #   --energy_grad_multiplier 1 \
 #   --diffusion_timesteps 500 \
+#   \
 #   --batch_size 16 \
 #   --num_workers 16 \
 #   --syn_dataloader \
-#   --resume /work/hdd/bdta/aqian1/mar_ebwm/output/EDM-256-base-lr3e-6-timesteps500-bz256-epo320-c1k \
-#   --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/preview-test-mcmc \
+#   \
 #   --preview_only \
 #   --preview_labels 0,1,2,3,430,485,605,726,850

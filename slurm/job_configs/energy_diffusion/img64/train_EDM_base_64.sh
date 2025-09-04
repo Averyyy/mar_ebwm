@@ -1,8 +1,13 @@
+#!/bin/bash
 #SBATCH --job-name=EDM-base-lr-search
 #SBATCH --array=0-2
 #SBATCH --output=logs/slurm/EDM-base-lr-search/%A/EDM-base-%a.out
 #SBATCH --time=48:00:00
 #SBATCH --gpus-per-node=1
+
+# ===== PURPOSE: Train Energy Diffusion Model (Base) on ImageNet-64 with grid search =====
+# ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/img64/train_EDM_base_64.sh =====
+# ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
 
 # --- Environment Setup ---
 # Set these variables for your system:
@@ -89,36 +94,36 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((6748 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
+  \
   --run_name ${RUN_NAME} \
+  --output_dir ${OUTPUT_DIR} \
+  \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
+  \
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --blr ${BLR} \
+  \
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${step_size} \
   --energy_grad_multiplier ${ENERGY_GRAD_MULTIPLIER} \
   --diffusion_timesteps ${DIFFUSION_TIMESTEPS} \
-  --batch_size ${BATCH_SIZE} \
-  --num_workers 32 \
-  --blr ${BLR} \
+  \
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
-  --output_dir ${OUTPUT_DIR} \
+  --num_workers 32 \
+  \
   --preview \
   --preview_interval 25 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
-  --online_eval \
-  --eval_freq 50 \
-  --use_fid_stats \
-  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
-  --num_sampling_steps ${NUM_EVAL_STEPS} \
-  --eval_bsz 256 \
-  --num_images ${NUM_EVAL_IMAGES} \
+  \
+  \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 25 \
@@ -126,3 +131,18 @@ torchrun \
 
 
 echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
+
+
+# ===== if you want to add online evaluation, uncomment the following lines and paste it back to the training command =====
+
+  # --online_eval \
+  # --eval_freq 50 \
+  # --use_fid_stats \
+  # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  # --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  # --num_sampling_steps ${NUM_EVAL_STEPS} \
+  # --eval_bsz 256 \
+  # --num_images ${NUM_EVAL_IMAGES} \
+
+
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====

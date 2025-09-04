@@ -1,4 +1,8 @@
 #!/bin/bash
+# ===== PURPOSE: Standard Diffusion Model training on ImageNet-64 with small model =====
+# ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/img64/train_SDM_s_64.sh =====
+# ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
+
 #SBATCH --job-name=standard-diffusion
 #SBATCH --array=0-0
 #SBATCH --output=logs/slurm/energy-diffusion/%A/standard-diffusion-grid-%a.out
@@ -14,7 +18,7 @@ export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache pa
 
 # --- Grid Search Parameters ---
 
---- Setup ---
+# --- Setup ---
 module load cuda/12.6.1
 source activate mar_gh200
 cd ${REPO_ROOT}
@@ -57,30 +61,29 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((8489 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
+
   --run_name ${RUN_NAME} \
+  --output_dir ${OUTPUT_DIR} \
+
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
+
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
   --batch_size ${BATCH_SIZE} \
-  --num_workers 8 \
   --blr ${BLR} \
+
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
-  --output_dir ${OUTPUT_DIR} \
+  --num_workers 8 \
+
   --preview \
   --preview_interval 10 \
-  --online_eval \
-  --eval_freq 50 \
-  --use_fid_stats \
-  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
-  --num_sampling_steps ${NUM_EVAL_STEPS} \
-  --eval_bsz 256 \
-  --num_images ${NUM_EVAL_IMAGES} \
+
+
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 50 \
@@ -88,4 +91,19 @@ torchrun \
 
 
 echo "--- Standard Diffusion job ${SLURM_ARRAY_TASK_ID} completed ---"
+
+
+# ===== if you want to add online evaluation, uncomment the following lines and paste it back to the training command =====
+
+  # --online_eval \
+  # --eval_freq 50 \
+  # --use_fid_stats \
+  # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  # --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  # --num_sampling_steps ${NUM_EVAL_STEPS} \
+  # --eval_bsz 256 \
+  # --num_images ${NUM_EVAL_IMAGES} \
+
+
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====
 

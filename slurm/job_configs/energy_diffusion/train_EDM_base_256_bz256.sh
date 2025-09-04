@@ -1,3 +1,8 @@
+#!/bin/bash
+# ===== PURPOSE: Energy Diffusion Model training on ImageNet-256 with base model =====
+# ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/train_EDM_base_256_bz256.sh =====
+# ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
+
 #SBATCH --job-name=EDM-base-bz256-400k
 #SBATCH --array=0-0
 #SBATCH --output=logs/slurm/EDM-base-bztest/256/%A/EDM-base-%a.out
@@ -90,29 +95,36 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((6284 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
+
   --run_name ${RUN_NAME} \
+  --output_dir ${OUTPUT_DIR} \
+  --resume ${OUTPUT_DIR} \
+
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
+
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --blr ${BLR} \
+
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${step_size} \
   --energy_grad_multiplier ${ENERGY_GRAD_MULTIPLIER} \
   --diffusion_timesteps ${DIFFUSION_TIMESTEPS} \
-  --batch_size ${BATCH_SIZE} \
-  --num_workers 8 \
-  --blr ${BLR} \
+
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-256-ptshard-16 \
   --cached_format ptshard \
-  --output_dir ${OUTPUT_DIR} \
-  --resume ${OUTPUT_DIR} \
+  --num_workers 8 \
+
   --preview \
   --preview_interval 20 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
+
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 20 \
@@ -120,3 +132,18 @@ torchrun \
 
 
 echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
+
+
+# ===== if you want to add online evaluation, uncomment the following lines and paste it back to the training command =====
+
+  # --online_eval \
+  # --eval_freq 20 \
+  # --use_fid_stats \
+  # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  # --eval_real_dataset ${DATA_ROOT}/imagenet/val \
+  # --num_sampling_steps ${NUM_EVAL_STEPS} \
+  # --eval_bsz ${EVAL_BATCH_SIZE} \
+  # --num_images ${NUM_EVAL_IMAGES} \
+
+
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====

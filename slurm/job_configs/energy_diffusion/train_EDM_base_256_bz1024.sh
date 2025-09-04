@@ -1,8 +1,13 @@
+#!/bin/bash
 #SBATCH --job-name=EDM-base-bz-test
 #SBATCH --array=0-0
 #SBATCH --output=logs/slurm/EDM-base-bztest/1024/%A/EDM-base-%a.out
 #SBATCH --time=48:00:00
 #SBATCH --gpus-per-node=4
+
+# ===== PURPOSE: Grid search training for Energy Diffusion Model (Base) on ImageNet-256 with batch size 1024 =====
+# ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/train_EDM_base_256_bz1024.sh =====
+# ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
 
 # --- Environment Setup ---
 # Set these variables for your system:
@@ -90,29 +95,36 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((6748 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
+  \
   --run_name ${RUN_NAME} \
+  --output_dir ${OUTPUT_DIR} \
+  \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
+  \
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --grad_accu 2 \
+  --blr ${BLR} \
+  \
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${step_size} \
   --energy_grad_multiplier ${ENERGY_GRAD_MULTIPLIER} \
   --diffusion_timesteps ${DIFFUSION_TIMESTEPS} \
-  --batch_size ${BATCH_SIZE} \
-  --grad_accu 2 \
-  --num_workers 8 \
-  --blr ${BLR} \
+  \
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-256-ptshard-16 \
   --cached_format ptshard \
-  --output_dir ${OUTPUT_DIR} \
+  --num_workers 8 \
+  \
   --preview \
   --preview_interval 20 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
+  \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 20 \
@@ -123,6 +135,7 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
 
 
 
+# ===== if you want to add online evaluation, uncomment the following lines and paste it back to the training command =====
 
   # --online_eval \
   # --eval_freq 20 \
@@ -134,32 +147,39 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
   # --num_images ${NUM_EVAL_IMAGES} \
 
 
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====
 
 # torchrun \
 #   --nproc_per_node=4 \
 #   --master_addr=localhost \
 #   --master_port=6748 \
 #   main_ebm.py \
+#   \
 #   --run_name test-loggging \
+#   --output_dir ${REPO_ROOT}/output/test-loggging \
+#   \
 #   --img_size 64 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
 #   --model_type ebm \
 #   --model ebm_base \
+#   \
 #   --epochs 80 \
 #   --warmup_epochs 4 \
+#   --batch_size 128 \
+#   --grad_accu 2 \
+#   --blr 3e-6 \
+#   \
 #   --use_energy \
 #   --use_innerloop_opt \
 #   --mcmc_step_size 0.0001 \
 #   --energy_grad_multiplier 1 \
 #   --diffusion_timesteps 500 \
-#   --batch_size 128 \
-#   --grad_accu 2 \
-#   --num_workers 8 \
-#   --blr 3e-6 \
+#   \
 #   --use_cached \
 #   --cached_path ${DATA_ROOT}/cached-imagenet1k-64-ptshard-c7 \
 #   --cached_format ptshard \
-#   --output_dir ${REPO_ROOT}/output/test-loggging \
+#   --num_workers 8 \
+#   \
 #   --val \
 #   --val_batch_size 128 \
 #   --val_freq 1 \

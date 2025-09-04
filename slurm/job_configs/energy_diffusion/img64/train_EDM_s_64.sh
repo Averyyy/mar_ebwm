@@ -1,3 +1,8 @@
+#!/bin/bash
+# ===== PURPOSE: Energy Diffusion Model training on ImageNet-64 with small model and grid search =====
+# ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/img64/train_EDM_s_64.sh =====
+# ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
+
 #SBATCH --job-name=energy-diffusion
 #SBATCH --array=0-0
 #SBATCH --output=logs/slurm/energy-diffusion/fewer-diffusion-steps-%A/energy-diffusion-%a.out
@@ -94,36 +99,36 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((5748 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
+
   --run_name ${RUN_NAME} \
+  --output_dir ${OUTPUT_DIR} \
+
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
+
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --blr ${BLR} \
+
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${step_size} \
-  --diffusion_timesteps 500 \
   --energy_grad_multiplier ${ENERGY_GRAD_MULTIPLIER} \
-  --batch_size ${BATCH_SIZE} \
-  --num_workers 16 \
-  --blr ${BLR} \
+  --diffusion_timesteps 500 \
+
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
-  --output_dir ${OUTPUT_DIR} \
+  --num_workers 16 \
+
   --preview \
   --preview_interval 50 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
-  --online_eval \
-  --eval_freq 50 \
-  --use_fid_stats \
-  --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
-  --num_sampling_steps ${NUM_EVAL_STEPS} \
-  --eval_bsz 256 \
-  --num_images ${NUM_EVAL_IMAGES} \
+
+
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 20 \
@@ -132,53 +137,17 @@ torchrun \
 
 echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
 
-  # --supervise_energy_landscape \
-  # --contrasive_loss_scale ${CONTRASTIVE_LOSS_SCALE} \
-  #   --learnable_mcmc_step_size \
-  # --mcmc_refinement_loss_scale ${MCMC_REFINEMENT_LOSS_SCALE} \
-  # --wandb_log_mse_only \
 
-# torchrun \
-#   --nproc_per_node=4 \
-#   --master_addr=localhost \
-#   --master_port=15149 \
-#   main_ebm.py \
-#   --run_name test-EDM \
-#   --img_size 64 \
-#   --vae_path pretrained_models/vae/kl16.ckpt \
-#   --model_type ebm \
-#   --model ebm_small \
-#   --use_energy \
-#   --use_innerloop_opt \
-#   --supervise_energy_landscape \
-#   --wandb_log_mse_only \
-#   --mcmc_step_size 0.1 \
-#   --learnable_mcmc_step_size \
-#   --log_energy_accept_rate \
-#   --epochs 500 \
-#   --warmup_epochs 5 \
-#   --batch_size 2048 \
-#   --num_workers 8 \
-#   --blr 9e-6 \
-#   --use_cached \
-#   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
-#   --cached_format ptshard \
-#   --output_dir ${REPO_ROOT}/output/test-edm \
-#   --preview \
-#   --preview_interval 1 \
-#   --preview_labels 0,1,2,3,4,5,6,7,8,9,10,11,113,130,282,283,284,309,430,485,605,726,850 \
-#   --online_eval \
-#   --eval_freq 50 \
-#   --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
-#   --use_fid_stats \
-#   --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-#   --num_sampling_steps 250 \
-#   --eval_bsz 256 \
-#   --num_images 1000 \
-#   --val \
-#   --val_batch_size 2048 \
-#   --val_data_path ${DATA_ROOT}/imagenet-1k-64/val \
-#   --val_freq 5 
+# ===== if you want to add online evaluation, uncomment the following lines and paste it back to the training command =====
+
+  # --online_eval \
+  # --eval_freq 50 \
+  # --use_fid_stats \
+  # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+  # --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  # --num_sampling_steps ${NUM_EVAL_STEPS} \
+  # --eval_bsz 256 \
+  # --num_images ${NUM_EVAL_IMAGES} \
 
 
-    # --run_name test-EDM-small-64-step_0.1-bz2048-lr_9e-6-epo500-c1k \
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====
