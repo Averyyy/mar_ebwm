@@ -11,7 +11,6 @@
 # --- Environment Setup ---
 # Set these variables for your system:
 export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
-export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
 export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
 
 

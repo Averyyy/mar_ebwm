@@ -273,7 +273,8 @@ class EBM(nn.Module):
                 base_steps = 5
         
         # Timestep adaptation: more steps for higher timesteps (more noise)
-        t_normalized = t.float().mean() / self.train_diffusion.num_timesteps
+        # Use generation schedule length for normalization to match sampling loop
+        t_normalized = t.float().mean() / self.gen_diffusion.num_timesteps
         timestep_factor = 1.0 + 2.0 * t_normalized  # 1.0 to 3.0 range
         
         adaptive_steps = int(base_steps * timestep_factor)
@@ -330,7 +331,8 @@ class EBM(nn.Module):
                 else:
                     x_new = x_opt - alpha * gradients.float()  # Gradient descent for inference
                 
-                alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
+                # Use generation schedule's alphas_cumprod to match sampling timesteps
+                alpha_cumprod = torch.from_numpy(self.gen_diffusion.alphas_cumprod).float().to(t.device)[t]
                 max_val = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1) * 2.0
                 x_new = torch.clamp(x_new, -max_val, max_val)
                 

@@ -13,8 +13,8 @@
 # --- Environment Setup ---
 # Set these variables for your system:
 export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
-export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
 export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
+export IMAGENET1K_ROOT="/work/nvme/belh/aqian1/imagenet-1k"
 
 # --- Grid Search Parameters (MCMC step sizes to test) ---
 mcmc_steps=(1e-7 1e-6 1e-5 1e-3 1e-2 1e-1 1.0 100 1000 10000)
@@ -98,7 +98,7 @@ echo "--- MCMC Step Size Preview Test ${SLURM_ARRAY_TASK_ID} completed ---"
   # --eval_freq 20 \
   # --use_fid_stats \
   # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  # --eval_real_dataset ${DATA_ROOT}/imagenet/val \
+  # --eval_real_dataset ${IMAGENET1K_ROOT}/val \
   # --num_sampling_steps ${NUM_EVAL_STEPS} \
   # --eval_bsz ${EVAL_BATCH_SIZE} \
   # --num_images ${NUM_EVAL_IMAGES} \

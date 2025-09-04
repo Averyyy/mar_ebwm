@@ -110,7 +110,6 @@ main_ebm.py \
 Arguments:
 - `model_type`: to train energy diffusion, set to `ebm`.
 - (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_PATH}`.
-  Training time with cached latents is ~1d11h on 16 H100 GPUs with `--batch_size 128` (nearly 2x faster than without caching). Note this may slightly reduce training speed.
 
 ## Guides
 

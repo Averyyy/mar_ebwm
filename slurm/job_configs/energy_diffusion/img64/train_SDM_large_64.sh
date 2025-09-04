@@ -12,8 +12,8 @@
 # --- Environment Setup ---
 # Set these variables for your system:
 export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
-export DATA_ROOT="/work/hdd/bdta/aqian1/data"     # Change this to your data path
 export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
+export IMAGENET1K_ROOT="/work/nvme/belh/aqian1/imagenet-1k"
 
 
 # --- Grid Search Parameters ---
@@ -64,6 +64,7 @@ torchrun \
 
   --run_name ${RUN_NAME} \
   --output_dir ${OUTPUT_DIR} \
+  --resume ${OUTPUT_DIR} \
 
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
@@ -88,7 +89,7 @@ torchrun \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 25 \
-  --val_data_path ${DATA_ROOT}/imagenet-1k-64/val
+  --val_data_path ${IMAGENET1K_ROOT}/val
 
 
 echo "--- Standard Diffusion job ${SLURM_ARRAY_TASK_ID} completed ---"
@@ -100,7 +101,7 @@ echo "--- Standard Diffusion job ${SLURM_ARRAY_TASK_ID} completed ---"
   # --eval_freq 50 \
   # --use_fid_stats \
   # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  # --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  # --eval_real_dataset ${IMAGENET1K_ROOT}/val \
   # --num_sampling_steps ${NUM_EVAL_STEPS} \
   # --eval_bsz 256 \
   # --num_images ${NUM_EVAL_IMAGES} \
