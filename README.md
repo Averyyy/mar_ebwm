@@ -21,7 +21,7 @@ This repo contains:
 ## Preparation
 
 ### Dataset
-Download [ImageNet](http://image-net.org/download) and place it in your `IMAGENET_PATH`.
+Download [ImageNet](http://image-net.org/download) and place it in your `IMAGENET1K_ROOT`.
 
 ### Installation
 
@@ -62,7 +62,7 @@ torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 \
 main_cache.py \
 --img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 \
 --batch_size 128 \
---data_path ${IMAGENET_PATH} --cached_path ${CACHED_PATH} \
+--data_path ${IMAGENET1K_ROOT} --cached_path ${CACHED_PATH} \
 --cache_format ptshard --cache_shard_size 64
 ```
 
