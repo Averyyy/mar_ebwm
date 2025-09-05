@@ -55,14 +55,14 @@ For convenience, our pre-trained EBM models can be downloaded directly here as w
 
 ### (Optional) Caching VAE Latents
 
-Given that our data augmentation consists of simple center cropping and random flipping, the VAE latents can be pre-computed and saved to `CACHED_PATH` to save computations during EBM training:
+Given that our data augmentation consists of simple center cropping and random flipping, the VAE latents can be pre-computed and saved to `CACHED_ROOT` to save computations during EBM training:
 
 ```bash
 torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 \
 main_cache.py \
 --img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 \
 --batch_size 128 \
---data_path ${IMAGENET1K_ROOT} --cached_path ${CACHED_PATH} \
+--data_path ${IMAGENET1K_ROOT} --cached_path ${CACHED_ROOT} \
 --cache_format ptshard --cache_shard_size 64
 ```
 
@@ -97,7 +97,7 @@ main_ebm.py \
   --num_workers 32 \
   --blr 9e-6 \
   --use_cached \
-  --cached_path ${CACHED_PATH} \
+  --cached_path ${CACHED_ROOT} \
   --cached_format ptshard \
   --output_dir ${OUTPUT_DIR} \
   --online_eval \
@@ -109,7 +109,7 @@ main_ebm.py \
 
 Arguments:
 - `model_type`: to train energy diffusion, set to `ebm`.
-- (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_PATH}`.
+- (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_ROOT}`.
 
 ## Guides
 
@@ -199,13 +199,13 @@ torchrun \
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
-  --data_path ${DATA_ROOT}/imagenet-1k-64 \
+  --data_path ${IMAGENET1K_ROOT}/imagenet-1k-64 \
   --diffusion_timesteps 500 \
   --num_sampling_steps 250 \
   --evaluate \
   --use_fid_stats \
   --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  --eval_real_dataset ${IMAGENET1K_ROOT}/imagenet-1k-64/val \
   --eval_bsz 256 \
   --num_images 1000 \
   --output_dir ${REPO_ROOT}/output/EDM-eval-s64-step_0.001-diffusion_step-500-c1k-always_accept \
@@ -224,7 +224,7 @@ torchrun \
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
-  --data_path ${DATA_ROOT}/imagenet-1k-64 \
+  --data_path ${IMAGENET1K_ROOT}/imagenet-1k-64 \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ebm \
   --model ebm_small \
@@ -235,7 +235,7 @@ torchrun \
   --num_sampling_steps 250 \
   --use_fid_stats \
   --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
-  --eval_real_dataset ${DATA_ROOT}/imagenet-1k-64/val \
+  --eval_real_dataset ${IMAGENET1K_ROOT}/imagenet-1k-64/val \
   --eval_bsz 256 \
   --num_images 1000 \
   --output_dir ${REPO_ROOT}/output/EDM-eval-s64-step_0.001-diffusion_step-500-c1k-vanilla \
