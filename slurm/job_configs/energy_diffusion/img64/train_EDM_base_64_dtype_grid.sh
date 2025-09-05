@@ -98,21 +98,22 @@ torchrun \
   --master_addr=localhost \
   --master_port=$((6758 + SLURM_ARRAY_TASK_ID)) \
   main_ebm.py \
-
+  \
   --run_name ${BASE_RUN_NAME} \
   --output_dir ${BASE_OUTPUT_DIR} \
   --resume ${BASE_OUTPUT_DIR} \
-
+  \
   --img_size ${IMG_SIZE} \
   --vae_path pretrained_models/vae/kl16.ckpt \
   --model_type ${MODEL_TYPE} \
   --model ${MODEL} \
-
+  \
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
   --batch_size ${BATCH_SIZE} \
+  --grad_accu ${GRAD_ACCU} \
   --blr ${BLR} \
-
+  \
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${MCMC_STEP_SIZE} \
@@ -121,17 +122,16 @@ torchrun \
   --train_dtype ${train_dtype} \
   --eval_dtype ${train_dtype} \
   --auxiliary_eval_dtypes ${auxiliary_eval_dtypes} \
-
+  \
   --use_cached \
   --cached_path ${CACHE_ROOT}/cached-imagenet1k-64-ptshard-32 \
   --cached_format ptshard \
   --num_workers 32 \
-
+  \
   --preview \
   --preview_interval 25 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
-
-
+  \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 25 \

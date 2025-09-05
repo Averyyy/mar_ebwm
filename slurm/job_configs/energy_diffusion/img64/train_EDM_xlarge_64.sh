@@ -125,7 +125,6 @@ torchrun \
   --preview_interval 25 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
   \
-  \
   --val \
   --val_batch_size ${BATCH_SIZE} \
   --val_freq 25 \

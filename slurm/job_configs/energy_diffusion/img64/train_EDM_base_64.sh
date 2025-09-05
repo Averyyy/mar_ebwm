@@ -107,6 +107,7 @@ torchrun \
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
   --batch_size ${BATCH_SIZE} \
+  --grad_accu ${GRAD_ACCU} \
   --blr ${BLR} \
   \
   --use_energy \
@@ -123,7 +124,6 @@ torchrun \
   --preview \
   --preview_interval 25 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
-  \
   \
   --val \
   --val_batch_size ${BATCH_SIZE} \
