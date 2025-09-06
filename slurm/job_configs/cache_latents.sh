@@ -18,6 +18,16 @@ export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache pa
 
 cd ${REPO_ROOT}
 
+# --- Choose a random master port (per run) ---
+if [ -z "${MASTER_PORT}" ]; then
+  if command -v shuf >/dev/null 2>&1; then
+    MASTER_PORT=$(shuf -i 20000-65000 -n 1)
+  else
+    MASTER_PORT=$(( (RANDOM % 45000) + 20000 ))
+  fi
+fi
+echo "Using MASTER_PORT=${MASTER_PORT}"
+
 # torchrun --nproc_per_node=4  --nnodes=1 --node_rank=0 --master_addr=localhost --master_port=5712 \
 # main_cache.py \
 # --img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 --effective_img_size 64 \
@@ -32,7 +42,7 @@ torchrun \
   --nnodes=1 \
   --node_rank=0 \
   --master_addr=localhost \
-  --master_port=19374 \
+  --master_port=${MASTER_PORT} \
   main_cache.py \
   \
   --data_path ${CACHE_ROOT}/imagenet-1k \

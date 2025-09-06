@@ -89,11 +89,21 @@ echo "Run Name: ${RUN_NAME}"
 echo "Output Dir: ${OUTPUT_DIR}"
 echo "--------------------"
 
+# --- Choose a random master port (per run) ---
+if [ -z "${MASTER_PORT}" ]; then
+  if command -v shuf >/dev/null 2>&1; then
+    MASTER_PORT=$(shuf -i 20000-65000 -n 1)
+  else
+    MASTER_PORT=$(( (RANDOM % 45000) + 20000 ))
+  fi
+fi
+echo "Using MASTER_PORT=${MASTER_PORT}"
+
 # --- Training Command for Energy Diffusion ---
 torchrun \
   --nproc_per_node=${NUM_GPUS} \
   --master_addr=localhost \
-  --master_port=$((6748 + SLURM_ARRAY_TASK_ID)) \
+  --master_port=${MASTER_PORT} \
   main_ebm.py \
   \
   --run_name ${RUN_NAME} \

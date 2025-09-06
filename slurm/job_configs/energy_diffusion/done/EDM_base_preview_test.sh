@@ -60,11 +60,21 @@ echo "Model: ${MODEL}"
 echo "Image Size: ${IMG_SIZE}"
 echo "--------------------"
 
+# --- Choose a random master port (per run) ---
+if [ -z "${MASTER_PORT}" ]; then
+  if command -v shuf >/dev/null 2>&1; then
+    MASTER_PORT=$(shuf -i 20000-65000 -n 1)
+  else
+    MASTER_PORT=$(( (RANDOM % 45000) + 20000 ))
+  fi
+fi
+echo "Using MASTER_PORT=${MASTER_PORT}"
+
 # --- Preview Command (No Training) ---
 torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
-  --master_port=$((7638 + SLURM_ARRAY_TASK_ID)) \
+  --master_port=${MASTER_PORT} \
   main_ebm.py \
   \
   --run_name preview-mcmc-${mcmc_step_size} \

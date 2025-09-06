@@ -41,6 +41,16 @@ module load cuda/12.6.1
 source activate mar_gh200
 cd ${REPO_ROOT}
 
+# --- Choose a random master port (per run) ---
+if [ -z "${MASTER_PORT}" ]; then
+  if command -v shuf >/dev/null 2>&1; then
+    MASTER_PORT=$(shuf -i 20000-65000 -n 1)
+  else
+    MASTER_PORT=$(( (RANDOM % 45000) + 20000 ))
+  fi
+fi
+echo "Using MASTER_PORT=${MASTER_PORT}"
+
 # --- Parameters (adapted from 256px config) ---
 NUM_GPUS=2
 GRAD_ACCU=1
@@ -89,7 +99,7 @@ echo "=== TRAINING WITH AUXILIARY EVALUATIONS ==="
 torchrun \
   --nproc_per_node=${NUM_GPUS} \
   --master_addr=localhost \
-  --master_port=$((18438 + SLURM_ARRAY_TASK_ID)) \
+  --master_port=${MASTER_PORT} \
   main_ebm.py \
   --run_name ${BASE_RUN_NAME} \
   --img_size ${IMG_SIZE} \

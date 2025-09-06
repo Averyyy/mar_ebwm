@@ -21,7 +21,31 @@ This repo contains:
 ## Preparation
 
 ### Dataset
-Download [ImageNet](http://image-net.org/download) and place it in your `IMAGENET1K_ROOT`.
+The repo is using Imagenet-1k which is available for download at [ImageNet](http://image-net.org/download). You could also download the dataset via [huggingface](#TODO:linktohuggingface). After downloading and unzipping, you could use `util/scripts/reorganize_imagenet_inplace.py` to reorganize the dataset from the original structure into a structure like this: 
+
+```
+./
+├── train/
+│   ├── n01440764/
+│   │   ├── n01440764_10022.JPEG
+│   │   ├── n01440764_10023.JPEG
+│   │   └── ...
+│   └── ...
+├── val/
+│   ├── n01440764/
+│   │   ├── n01440764_10022.JPEG
+│   │   ├── n01440764_10023.JPEG
+│   │   └── ...
+│   └── ...
+├── test/
+│   ├── n01440764/
+│   │   ├── n01440764_10022.JPEG
+│   │   ├── n01440764_10023.JPEG
+│   │   └── ...
+│   └── ...
+```
+
+There is also a file calld `util/imagenet_id_to_name.txt` to map the class id to the class name.
 
 ### Installation
 

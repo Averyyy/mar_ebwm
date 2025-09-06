@@ -91,12 +91,22 @@ echo "Base Run Name: ${BASE_RUN_NAME}"
 echo "Base Output Dir: ${BASE_OUTPUT_DIR}"
 echo "--------------------"
 
+# --- Choose a random master port (per run) ---
+if [ -z "${MASTER_PORT}" ]; then
+  if command -v shuf >/dev/null 2>&1; then
+    MASTER_PORT=$(shuf -i 20000-65000 -n 1)
+  else
+    MASTER_PORT=$(( (RANDOM % 45000) + 20000 ))
+  fi
+fi
+echo "Using MASTER_PORT=${MASTER_PORT}"
+
 # --- Training Phase with Auxiliary Evaluations ---
 echo "=== TRAINING WITH AUXILIARY EVALUATIONS ==="
 torchrun \
   --nproc_per_node=${NUM_GPUS} \
   --master_addr=localhost \
-  --master_port=$((6758 + SLURM_ARRAY_TASK_ID)) \
+  --master_port=${MASTER_PORT} \
   main_ebm.py \
   \
   --run_name ${BASE_RUN_NAME} \
@@ -150,6 +160,3 @@ echo "--- Energy Diffusion Dtype Grid job ${SLURM_ARRAY_TASK_ID} completed ---"
   # --num_sampling_steps ${NUM_EVAL_STEPS} \
   # --eval_bsz 256 \
   # --num_images ${NUM_EVAL_IMAGES} \
-
-
-# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====

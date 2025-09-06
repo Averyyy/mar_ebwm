@@ -121,11 +121,21 @@ echo "Output Dir: ${OUTPUT_DIR}"
 echo "Mode: ${MODE_DESC} (CFLAG=${CFLAG}, RFLAG=${RFLAG})"
 echo "--------------------"
 
+# --- Choose a random master port (per run) ---
+if [ -z "${MASTER_PORT}" ]; then
+  if command -v shuf >/dev/null 2>&1; then
+    MASTER_PORT=$(shuf -i 20000-65000 -n 1)
+  else
+    MASTER_PORT=$(( (RANDOM % 45000) + 20000 ))
+  fi
+fi
+echo "Using MASTER_PORT=${MASTER_PORT}"
+
 # --- Training Command for Energy Diffusion ---
 torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
-  --master_port=$((15648 + raw_task_id)) \
+  --master_port=${MASTER_PORT} \
   main_ebm.py \
   --run_name ${RUN_NAME} \
   --img_size ${IMG_SIZE} \
@@ -166,6 +176,5 @@ torchrun \
 
 
 echo "--- Energy Diffusion Grid job ${SLURM_ARRAY_TASK_ID} (${MODE_DESC}) completed ---"
-
 
 

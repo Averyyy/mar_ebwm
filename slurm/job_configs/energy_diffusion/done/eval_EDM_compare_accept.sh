@@ -16,6 +16,16 @@ module load cuda/12.6.1
 source activate mar_gh200
 cd ${REPO_ROOT}
 
+# --- Choose a random master port (per run) ---
+if [ -z "${MASTER_PORT}" ]; then
+  if command -v shuf >/dev/null 2>&1; then
+    MASTER_PORT=$(shuf -i 20000-65000 -n 1)
+  else
+    MASTER_PORT=$(( (RANDOM % 45000) + 20000 ))
+  fi
+fi
+echo "Using MASTER_PORT=${MASTER_PORT}"
+
 # --- Branch 1: always accept optimization steps ---
 echo "[Branch 1] always_accept_opt_steps = True"
 mkdir -p \
@@ -24,7 +34,7 @@ mkdir -p \
 torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
-  --master_port=6748 \
+  --master_port=${MASTER_PORT} \
   main_ebm.py \
   --run_name EDM-eval-s64-step_0.001-diffusion_step-500-c1k-always_accept \
   --img_size 64 \
@@ -58,7 +68,7 @@ mkdir -p \
 torchrun \
   --nproc_per_node=1 \
   --master_addr=localhost \
-  --master_port=7748 \
+  --master_port=${MASTER_PORT} \
   main_ebm.py \
   --run_name EDM-eval-s64-step_0.001-diffusion_step-500-c1k-vanilla \
   --img_size 64 \
