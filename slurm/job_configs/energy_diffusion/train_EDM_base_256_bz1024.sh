@@ -158,16 +158,15 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
   # --num_images ${NUM_EVAL_IMAGES} \
 
 
-# ===== hardcoded scratch for your convenience to run in a srun interactive shell =====
+# ===== hardcoded scratch for your convenience to run in a srun interactive shell for testing =====
 
 # torchrun \
-#   --nproc_per_node=4 \
+#   --nproc_per_node=1 \
 #   --master_addr=localhost \
 #   --master_port=6748 \
 #   main_ebm.py \
 #   \
-#   --run_name test-loggging \
-#   --output_dir ${REPO_ROOT}/output/test-loggging \
+#   --output_dir /work/hdd/bdta/aqian1/mar_ebwm/output/test-loggging \
 #   \
 #   --img_size 64 \
 #   --vae_path pretrained_models/vae/kl16.ckpt \
@@ -177,21 +176,24 @@ echo "--- Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} completed ---"
 #   --epochs 80 \
 #   --warmup_epochs 4 \
 #   --batch_size 128 \
-#   --grad_accu 2 \
+#   --grad_accu 1 \
 #   --blr 3e-6 \
 #   \
 #   --use_energy \
 #   --use_innerloop_opt \
-#   --mcmc_step_size 0.0001 \
-#   --energy_grad_multiplier 1 \
 #   --diffusion_timesteps 500 \
 #   \
 #   --use_cached \
-#   --cached_path ${DATA_ROOT}/cached-imagenet1k-64-ptshard-c7 \
+#   --cached_path /work/hdd/bdta/aqian1/data/cached-imagenet1k-64-ptshard-c7 \
 #   --cached_format ptshard \
-#   --num_workers 8 \
+#   --num_workers 32 \
 #   \
-#   --val \
-#   --val_batch_size 128 \
-#   --val_freq 1 \
-#   --val_data_path ${DATA_ROOT}/val-64-c7
+#   --online_eval \
+#   --eval_freq 20 \
+#   --use_fid_stats \
+#   --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
+#   --eval_real_dataset /work/nvme/belh/aqian1/imagenet-1k/val \
+#   --num_sampling_steps 5 \
+#   --eval_bsz 512 \
+#   --num_images 7 \
+#   --class_num 7
