@@ -105,6 +105,75 @@ class EBM(nn.Module):
             diffusion_steps=num_diffusion_timesteps,
         )
         
+    # ---------------------------- CFG utilities ----------------------------
+    def _has_unconditional_embedding(self) -> bool:
+        """Return True if LabelEmbedder has an extra unconditional token."""
+        return (
+            hasattr(self.dit, 'y_embedder')
+            and getattr(self.dit.y_embedder, 'embedding_table', None) is not None
+            and self.dit.y_embedder.embedding_table.num_embeddings
+            > self.dit.y_embedder.num_classes
+        )
+
+    def _make_cfg_model(self, cfg_scale: float):
+        """
+        Wrap self.dit with classifier-free guidance. The returned callable
+        matches the diffusion interface: fn(x, t, **kwargs) -> model_out.
+
+        - Uses split-half batching to compute conditional and unconditional.
+        - Handles odd batch sizes by padding and trimming.
+        - Applies guidance on the first 3 channels for reproducibility.
+        """
+        has_uncond = self._has_unconditional_embedding()
+
+        def model_fn(x, t, **kwargs):
+            if cfg_scale == 1.0 or not has_uncond:
+                return self.dit(x, t, kwargs.get("y"))
+
+            B = x.shape[0]
+            if B == 0:
+                return self.dit(x, t, kwargs.get("y"))
+
+            # Pad to even batch size if needed
+            pad = (B % 2) == 1
+            if pad:
+                x_pad = torch.cat([x, x[-1:].clone()], dim=0)
+                t_pad = torch.cat([t, t[-1:].clone()], dim=0)
+                y_in = kwargs.get("y")
+                if y_in is None:
+                    y_in = torch.randint(0, self.num_classes, (B,), device=x.device)
+                y_pad = torch.cat([y_in, y_in[-1:].clone()], dim=0)
+            else:
+                x_pad = x
+                t_pad = t
+                y_pad = kwargs.get("y")
+                if y_pad is None:
+                    y_pad = torch.randint(0, self.num_classes, (B,), device=x.device)
+
+            half = x_pad[: x_pad.shape[0] // 2]
+            x_combined = torch.cat([half, half], dim=0)
+
+            y_half = y_pad[: x_pad.shape[0] // 2]
+            y_uncond = torch.full_like(y_half, fill_value=self.num_classes)  # unconditional token index
+            y_combined = torch.cat([y_half, y_uncond], dim=0)
+
+            t_half = t_pad[: x_pad.shape[0] // 2]
+            t_combined = torch.cat([t_half, t_half], dim=0)
+
+            out = self.dit(x_combined, t_combined, y_combined)
+
+            eps, rest = out[:, :3], out[:, 3:]
+            cond_eps, uncond_eps = torch.split(eps, eps.shape[0] // 2, dim=0)
+            guided_half = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+            eps_guided = torch.cat([guided_half, guided_half], dim=0)
+            out_guided = torch.cat([eps_guided, rest], dim=1)
+
+            if pad:
+                out_guided = out_guided[:B]
+            return out_guided
+
+        return model_fn
+
     
     def compute_contrastive_loss(self, x, t, labels):
         """
@@ -371,7 +440,7 @@ class EBM(nn.Module):
         else:
             return result
     
-    def energy_aware_p_sample_loop(self, shape, labels, progress=False):
+    def energy_aware_p_sample_loop(self, shape, labels, progress=False, cfg=1.0):
         """
         Modified p_sample_loop that includes energy optimization steps.
         Based on IRED's approach of calling opt_step during sampling.
@@ -396,13 +465,16 @@ class EBM(nn.Module):
         else:
             timesteps_iter = enumerate(timesteps)
             
+        # Select model used by diffusion at each step (with or without CFG)
+        model_for_sampling = self._make_cfg_model(cfg) if cfg != 1.0 else self.dit
+
         for i, t_val in timesteps_iter:
             t = torch.full((bsz,), t_val, device=device, dtype=torch.long)
             
             # Standard diffusion sampling step using gen_diffusion
             with torch.no_grad():
                 out = self.gen_diffusion.p_sample(
-                    self.dit,
+                    model_for_sampling,
                     x,
                     t, 
                     model_kwargs={"y": labels}
@@ -477,21 +549,31 @@ class EBM(nn.Module):
         shape = (bsz, self.vae_embed_dim, latent_size, latent_size)
         
         if cfg != 1.0:
-            # Classifier-free guidance sampling
-            print(f"🔀 Using CFG sampling (cfg={cfg}) - Energy sampling DISABLED")
-            # Use the DiT's built-in CFG
-            def cfg_model(x, t, **kwargs):
-                return self.dit.forward_with_cfg(x, t, kwargs.get("y"), cfg)
-            
-            samples = self.gen_diffusion.p_sample_loop(
-                model=cfg_model,
-                shape=shape,
-                clip_denoised=True,
-                model_kwargs={"y": labels},
-                cond_fn=None,
-                device=device,
-                progress=progress,
-            )
+            if self.use_energy and self.use_innerloop_opt:
+                print(f"🔀 Using CFG sampling (cfg={cfg}) WITH ENERGY-AWARE sampling")
+                samples = self.energy_aware_p_sample_loop(
+                    shape=(self.vae_embed_dim, latent_size, latent_size),
+                    labels=labels,
+                    progress=progress,
+                    cfg=cfg,
+                )
+            else:
+                if not self._has_unconditional_embedding():
+                    print("⚠️  CFG requested but unconditional label embedding not available (label_drop_prob==0). Fallback to standard sampling.")
+                    model_for_sampling = self.dit
+                else:
+                    print(f"🔀 Using CFG sampling (cfg={cfg}) - Energy sampling DISABLED")
+                    model_for_sampling = self._make_cfg_model(cfg)
+
+                samples = self.gen_diffusion.p_sample_loop(
+                    model=model_for_sampling,
+                    shape=shape,
+                    clip_denoised=True,
+                    model_kwargs={"y": labels},
+                    cond_fn=None,
+                    device=device,
+                    progress=progress,
+                )
         else:
             # Check if we need energy-aware sampling
             if self.use_energy and self.use_innerloop_opt:

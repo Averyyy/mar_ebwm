@@ -176,6 +176,7 @@ Arguments:
    - `--log_energy_accept_rate`: logs energy acceptance rate to wandb.
    - `--wandb_log_mse_only`: logs only MSE loss to wandb for comparison across variants.
    - `--mcmc_num_steps`: fixed number of MCMC steps during sampling; otherwise adaptive (may be slower).
+   - `--cfg`: cfg scale for sampling.
 
 ### Training tips
 1. Learning rate: `blr` denotes base LR; real LR = `blr * eff_batch_size / 256`.
@@ -201,6 +202,7 @@ Key flags used in the script:
 - `--num_images`: number of generated images for evaluation (should be divisible by classes)
 - `--eval_bsz`: evaluation batch size
 - `--always_accept_opt_steps`: if set, forces always-accept behavior for inner-loop optimization
+- `--cfg`: cfg scale for sampling.
 
 ### Direct torchrun examples
 
