@@ -21,7 +21,7 @@ This repo contains:
 ## Preparation
 
 ### Dataset
-The repo is using Imagenet-1k which is available for download at [ImageNet](http://image-net.org/download). You could also download the dataset via [huggingface](#TODO:linktohuggingface). After downloading and unzipping, you could use `util/scripts/reorganize_imagenet_inplace.py` to reorganize the dataset from the original structure into a structure like this: 
+The repo is using Imagenet-1k which is available for download at [ImageNet](http://image-net.org/download). You could also download the dataset via [huggingface](https://huggingface.co/datasets/ILSVRC/imagenet-1k/tree/main/data). After downloading and unzipping, you could use `util/scripts/reorganize_imagenet_inplace.py` to reorganize the dataset from the original structure into a structure like this: 
 
 ```
 ./
@@ -46,6 +46,56 @@ The repo is using Imagenet-1k which is available for download at [ImageNet](http
 ```
 
 There is also a file calld `util/imagenet_id_to_name.txt` to map the class id to the class name.
+
+## A step by step instruction on how to download huggingface imagenet1k dataset
+1. Make sure you have huggingface-cli installed in your conda envionement:
+```bash
+pip install -U "huggingface_hub[cli]"
+```
+
+2. Login to your accoundin huggingface-cli:
+```bash
+huggingface-cli login
+```
+Go to [huggingface](https://huggingface.co/datasets/ILSVRC/imagenet-1k/tree/main/data), make sure your account has access to this dataset
+
+3. Download all of the files in your desired directory:
+
+```bash
+for f in train_images_0.tar.gz train_images_1.tar.gz train_images_2.tar.gz \
+         train_images_3.tar.gz train_images_4.tar.gz val_images.tar.gz test_images.tar.gz
+do
+  huggingface-cli download ILSVRC/imagenet-1k \
+    --repo-type dataset \
+    --local-dir /path/to/your/directory \
+    data/$f
+done
+```
+
+4. Unzip the files:
+```bash
+cd /path/to/your/directory
+for tgz in *.tar.gz; do
+  tar -xvf "$tgz"
+done
+```
+To speed up, you could also use:
+
+```bash
+for tgz in *.tar.gz; do
+  tar -I "pigz -p 16" -xvf "$tgz"
+done
+```
+
+5. Reorganize the dataset in place:
+```bash
+python util/scripts/reorganize_imagenet_inplace.py --imagenet_root /path/to/your/directory --num_workers 32 --datasets val test
+```
+
+6. (optional) Resize the images to 64x64:
+```bash
+python util/scripts/resize_imgs.py --src_dir /path/to/your/directory --dst_dir /path/to/your/target/directory --target_size 64 64 --target
+```
 
 ### Installation
 
