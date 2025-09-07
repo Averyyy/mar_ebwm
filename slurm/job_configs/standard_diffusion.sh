@@ -1,15 +1,15 @@
 ### RESOURCE CONFIG ###
 
-#SBATCH --array=0-2
+#SBATCH --array=0
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 
 ### LOG CONFIG ###
 
-#SBATCH --job-name=EDM-base-effbs_@BZ-lr_@LR
-#SBATCH --output=logs/slurm/img_256/EDM-base-effbs_@BZ-lr_@LR%A-%a.log
-RUN_NAME="EDM-base-effbs_@BZ-lr_@LR"
+#SBATCH --job-name=SDM-base-effbs_@BZ-lr_@LR
+#SBATCH --output=logs/slurm/img_256/SDM-base-effbs_@BZ-lr_@LR%A-%a.log
+RUN_NAME="SDM-base-effbs_@BZ-lr_@LR"
 # NOTE ctrl d ALL THREE of above to modify job-name, output, and RUN_NAME (which should all be the same)
 # MODEL_TYPE="${RUN_NAME%%-*}" # unused for now
 MODEL_SIZE="${RUN_NAME#*-}"; MODEL_SIZE="${MODEL_SIZE%%-*}"
@@ -38,8 +38,8 @@ learning_rates=(0.0001 0.0003 0.00003)
 
 # --- Set Key Hyperparameters ---
 LR=${learning_rates[$SLURM_ARRAY_TASK_ID]}
-BATCH_SIZE_PER_DEVICE=128
-GRAD_ACCU=2
+BATCH_SIZE_PER_DEVICE=256
+GRAD_ACCU=1
 EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE_PER_DEVICE * GRAD_ACCU * NUM_GPUS * NUM_NODES))
 RUN_NAME="${RUN_NAME//@BZ/${EFFECTIVE_BATCH_SIZE}}"; RUN_NAME="${RUN_NAME//@LR/${LR}}"
 echo "RUN_NAME: ${RUN_NAME}"
@@ -50,11 +50,6 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --run_name ${RUN_NAME} \
 --model_type "ebm" \
 --model_size ${MODEL_SIZE} \
-\
---use_energy \
---use_innerloop_opt \
---mcmc_step_size 0.0001 \
---energy_grad_multiplier 1 \
 \
 --diffusion_timesteps 1000 \
 \

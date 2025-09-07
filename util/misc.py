@@ -297,6 +297,7 @@ def find_wandb_run_id_for_resume(resume_path, run_name):
     current_dir = os.getcwd()
     wandb_dirs_to_check = [
         os.path.join(current_dir, 'wandb'),
+        os.path.join(current_dir, './logs', 'wandb'),
         os.path.join(os.path.dirname(current_dir), 'wandb'),
         os.path.join(resume_abs_path, 'wandb'),
         os.path.join(os.path.dirname(resume_abs_path), 'wandb')
@@ -377,7 +378,7 @@ def init_wandb(args, is_resuming_checkpoint=False, resume_path=None):
             print(f"🔄 Resuming wandb run ID: {wandb_run_id} from checkpoint: {resume_path}")
             resume_mode = "allow"
         else:
-            print(f"⚠️  No matching wandb run found for checkpoint resume from {resume_path}, creating new run")
+            print(f"⚠️  No matching wandb run found for checkpoint resume from {resume_path}, creating new wandb run")
     else:
         print(f"🆕 Creating new wandb run: {args.run_name}")
     
