@@ -215,9 +215,10 @@ class DiT(nn.Module):
         self.blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, use_energy=use_energy) for _ in range(depth)
         ])
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         if use_energy:
-            self.energy_layer = EnergyLayer(hidden_size, linear_then_mean=linear_then_mean)
+            self.energy_layer = EnergyLayer(hidden_size, linear_then_mean=linear_then_mean) # final layer equivalent for EBM
+        else:
+            self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -251,10 +252,15 @@ class DiT(nn.Module):
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
         # Zero-out output layers:
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
+        if self.use_energy:
+            # nn.init.constant_(self.energy_layer.linear.weight, 0)
+            # nn.init.constant_(self.energy_layer.linear.bias, 0)
+            pass #TODO try adding this to see if helps
+        else:
+            nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+            nn.init.constant_(self.final_layer.linear.weight, 0)
+            nn.init.constant_(self.final_layer.linear.bias, 0)
         
         # Initialize energy layer if it exists:
         if hasattr(self, 'energy_layer'):

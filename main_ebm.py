@@ -49,8 +49,8 @@ def get_args_parser():
     parser.add_argument('--epochs', default=400, type=int)
 
     # Model parameters
-    parser.add_argument('--model', default='ebm_small', type=str, metavar='MODEL',
-                        help='Name of model to train')
+    # parser.add_argument('--model', default='ebm_small', type=str, metavar='MODEL', help='Name of model to train') TODO maybe remove this
+    parser.add_argument('--model_size', default='base', type=str, choices=["small", "base", "large", "xlarge"], help='Model Sizes for training')
 
     # VAE parameters
     parser.add_argument('--img_size', default=256, type=int,
@@ -111,10 +111,6 @@ def get_args_parser():
                         help='dataset path')
     parser.add_argument('--class_num', default=1000, type=int)
 
-    parser.add_argument('--output_dir', default='./output_dir',
-                        help='path where to save, empty for no saving')
-    parser.add_argument('--log_dir', default='./output_dir',
-                        help='path where to tensorboard log')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
@@ -161,18 +157,14 @@ def get_args_parser():
     # Energy Diffusion parameters  
     parser.add_argument('--mcmc_num_steps', default=None, type=int, help='[EnergyDiffusion] Number of MCMC/energy optimization steps. If None, uses adaptive steps during inference')
     parser.add_argument('--mcmc_step_size', default=0.01, type=float, help='[EnergyDiffusion] MCMC step size')
-    parser.add_argument('--use_energy', action='store_true',
-                        help='[PureDiffusion] Use IRED-style energy diffusion mode')
+    parser.add_argument('--use_energy', action='store_true', help='[PureDiffusion] Use IRED-style energy diffusion mode')
     parser.add_argument('--use_innerloop_opt', action='store_true',
                         help='[PureDiffusion] Use inner loop optimization during energy diffusion sampling')
     parser.add_argument('--always_accept_opt_steps', action='store_true',
                         help='[PureDiffusion] When use_innerloop_opt=True, always accept optimization steps regardless of energy evaluation')
     parser.add_argument('--supervise_energy_landscape', action='store_true',
                         help='[PureDiffusion] Use IRED-style energy landscape supervision during training')
-    parser.add_argument('--wandb_log_mse_only', action='store_true',
-                        help='[PureDiffusion] When using ebm with supervise_energy_landscape, only log MSE loss to wandb (not total loss)')
-    parser.add_argument('--log_energy_accept_rate', action='store_true',
-                        help='[PureDiffusion] Log accept rate during opt_step in energy diffusion sampling for each picture')
+    
     parser.add_argument('--learnable_mcmc_step_size', action='store_true',
                         help='[PureDiffusion] Make MCMC step size (alpha) a learnable parameter instead of fixed')
     parser.add_argument('--energy_grad_multiplier', default=1.0, type=float,
@@ -215,6 +207,15 @@ def get_args_parser():
     # Debug: half sampling (preview first half tokens with gt, and next half with inferenced tokens)
     parser.add_argument('--test_half_sampling', action='store_true',
                         help='Debug mode: feed half ground-truth tokens then generate the rest')
+
+    # Logging arguments
+    parser.add_argument('--output_dir', default='./output_dir', help='path where to save, empty for no saving')
+    parser.add_argument('--log_dir', default='./output_dir', help='path where to tensorboard log')
+    parser.add_argument('--log_energy_accept_rate', action='store_true', help='[PureDiffusion] Log accept rate during opt_step in energy diffusion sampling for each picture')
+
+    parser.add_argument('--wandb_entity', type=str, default=None, help='wandb entity')
+    parser.add_argument('--wandb_project', type=str, default=None, help='wandb project')
+    parser.add_argument('--wandb_log_mse_only', action='store_true', help='[PureDiffusion] When using ebm with supervise_energy_landscape, only log MSE loss to wandb (not total loss)')
     
     # Dtype selection
     parser.add_argument('--train_dtype', default='bf16', type=str, 
@@ -243,8 +244,7 @@ def get_args_parser():
 def main(args):
     misc.init_distributed_mode(args)
 
-    print('job dir: {}'.format(os.path.dirname(os.path.realpath(__file__))))
-    print("{}".format(args).replace(', ', ',\n'))
+    print('job directory: {}'.format(os.path.dirname(os.path.realpath(__file__))))
 
     device = torch.device(args.device)
 
@@ -259,7 +259,6 @@ def main(args):
     global_rank = misc.get_rank()
     
     total_num_workers = args.num_workers * num_tasks
-    print(f"total_num_workers: {total_num_workers}")
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -339,76 +338,75 @@ def main(args):
     for param in vae.parameters():
         param.requires_grad = False
 
+    # TEMP CODE TODO REMOVE IN FUTURE
+    if args.patch_size != 1:
+        raise NotImplementedError("args.patch_size != 1 not yet supported")
 
-    if args.model_type == "ebm":
-        from models import ebm
-        # Check if args.model specifies a ebm variant
-        if hasattr(ebm, args.model):
-            model = ebm.__dict__[args.model](
-                img_size=args.img_size,
-                vae_stride=args.vae_stride,
-                patch_size=args.patch_size,
-                vae_embed_dim=args.vae_embed_dim,
-                class_num=args.class_num,
-                class_dropout_prob=args.label_drop_prob,
-                num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
-                num_sampling_steps=int(args.num_sampling_steps),
-                use_energy=args.use_energy,
-                use_innerloop_opt=args.use_innerloop_opt,
-                always_accept_opt_steps=args.always_accept_opt_steps,
-                supervise_energy_landscape=args.supervise_energy_landscape,
-                mcmc_step_size=args.mcmc_step_size,
-                mcmc_num_steps=args.mcmc_num_steps,
-                linear_then_mean=args.linear_then_mean,
-                log_energy_accept_rate=args.log_energy_accept_rate,
-                learnable_mcmc_step_size=args.learnable_mcmc_step_size,
-                contrasive_loss_scale=args.contrasive_loss_scale,
-                mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
-                energy_gradient_multiplier=args.energy_grad_multiplier,
-            )
-        else:
-            # Fallback to default ebm model 
-            from models import EBM
-            model = EBM(
-                img_size=args.img_size,
-                vae_stride=args.vae_stride,
-                patch_size=args.patch_size,
-                vae_embed_dim=args.vae_embed_dim,
-                class_num=args.class_num,
-                class_dropout_prob=args.label_drop_prob,
-                num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
-                num_sampling_steps=int(args.num_sampling_steps),
-                dit_model=getattr(args, 'dit_model', 'DiT-B/2'),
-                use_energy=args.use_energy,
-                use_innerloop_opt=args.use_innerloop_opt,
-                always_accept_opt_steps=args.always_accept_opt_steps,
-                supervise_energy_landscape=args.supervise_energy_landscape,
-                mcmc_step_size=args.mcmc_step_size,
-                mcmc_num_steps=args.mcmc_num_steps,
-                linear_then_mean=args.linear_then_mean,
-                log_energy_accept_rate=args.log_energy_accept_rate,
-                learnable_mcmc_step_size=args.learnable_mcmc_step_size,
-                contrasive_loss_scale=args.contrasive_loss_scale,
-                mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
-                energy_gradient_multiplier=args.energy_grad_multiplier,
-            )
+    # TODO redo so just passes args so isnt so long? make actually clean
+    # if args.model_type == "ebm":
+    from models import ebm
+    #     # Check if args.model specifies a ebm variant
+    #     if hasattr(ebm, args.model):
+    model = ebm.__dict__[args.model_size](
+        img_size=args.img_size,
+        vae_stride=args.vae_stride,
+        patch_size=args.patch_size,
+        vae_embed_dim=args.vae_embed_dim,
+        class_num=args.class_num,
+        class_dropout_prob=args.label_drop_prob,
+        num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
+        num_sampling_steps=int(args.num_sampling_steps),
+        use_energy=args.use_energy,
+        use_innerloop_opt=args.use_innerloop_opt,
+        always_accept_opt_steps=args.always_accept_opt_steps,
+        supervise_energy_landscape=args.supervise_energy_landscape,
+        mcmc_step_size=args.mcmc_step_size,
+        mcmc_num_steps=args.mcmc_num_steps,
+        linear_then_mean=args.linear_then_mean,
+        log_energy_accept_rate=args.log_energy_accept_rate,
+        learnable_mcmc_step_size=args.learnable_mcmc_step_size,
+        contrasive_loss_scale=args.contrasive_loss_scale,
+        mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
+        energy_gradient_multiplier=args.energy_grad_multiplier,
+    )
+        # else: # TODO fix this code is super confusing and wont even work??? redo to be cleaner, remove this branch p sure
+        #     # Fallback to default ebm model 
+        #     from models import EBM
+        #     model = EBM(
+        #         img_size=args.img_size,
+        #         vae_stride=args.vae_stride,
+        #         patch_size=args.patch_size,
+        #         vae_embed_dim=args.vae_embed_dim,
+        #         class_num=args.class_num,
+        #         class_dropout_prob=args.label_drop_prob,
+        #         num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
+        #         num_sampling_steps=int(args.num_sampling_steps),
+        #         dit_model=getattr(args, 'dit_model', 'DiT-B/2'),
+        #         use_energy=args.use_energy,
+        #         use_innerloop_opt=args.use_innerloop_opt,
+        #         always_accept_opt_steps=args.always_accept_opt_steps,
+        #         supervise_energy_landscape=args.supervise_energy_landscape,
+        #         mcmc_step_size=args.mcmc_step_size,
+        #         mcmc_num_steps=args.mcmc_num_steps,
+        #         linear_then_mean=args.linear_then_mean,
+        #         log_energy_accept_rate=args.log_energy_accept_rate,
+        #         learnable_mcmc_step_size=args.learnable_mcmc_step_size,
+        #         contrasive_loss_scale=args.contrasive_loss_scale,
+        #         mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
+        #         energy_gradient_multiplier=args.energy_grad_multiplier,
+        #     )
 
-    print("Model = %s" % str(model))
     # following timm: set wd as 0 for bias and norm layers
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print("Number of trainable parameters: {}M".format(n_params / 1e6))
 
     model.to(device)
     model_without_ddp = model
 
     eff_batch_size = args.batch_size * misc.get_world_size() * args.grad_accu
     
-    if args.lr is None:  # only base_lr is specified
+    if args.lr is None:  # only base_lr is specified, scale LR
         args.lr = args.blr * eff_batch_size / 256
-
-    print("base lr: %.2e" % (args.lr * 256 / eff_batch_size))
-    print("actual lr: %.2e" % args.lr)
-    print("effective batch size: %d" % eff_batch_size)
+        print("base LR before scaling based on BS: %.2e" % (args.lr * 256 / eff_batch_size))
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
@@ -463,6 +461,15 @@ def main(args):
         misc.init_wandb(args, is_resuming_checkpoint=False, resume_path=None)
     else:
         misc.init_wandb(args, is_resuming_checkpoint=is_resuming_checkpoint, resume_path=args.resume)
+
+    # print lots of things that are useful for wandb
+    print("args:\n")
+    print("{}".format(args).replace(', ', ',\n'))
+    print(f"\ntotal_num_workers: {total_num_workers}\n")
+    print("Model = %s\n" % str(model))
+    print("Number of trainable parameters: {}M\n".format(n_params / 1e6))
+    print("LR used for training: %.2e\n" % args.lr)
+    print("effective batch size: %d\n" % eff_batch_size)
 
     # Initialize global variables for main run tracking
     global MAIN_RUN_ID, MAIN_PROJECT

@@ -221,6 +221,9 @@ class MetricLogger(object):
             
             if "langevin_noise_std" in self.meters:
                 log_dict["langevin_noise_std"] = float(self.meters["langevin_noise_std"].value)
+
+            if "grad_norm" in self.meters:
+                log_dict["grad_norm"] = float(self.meters["grad_norm"].value)
             
             try:
                 import wandb
@@ -379,7 +382,9 @@ def init_wandb(args, is_resuming_checkpoint=False, resume_path=None):
         print(f"🆕 Creating new wandb run: {args.run_name}")
     
     run = wandb.init(
-        project="energy-diffusion", # Jul.24: changed to a new project | prev: ebwm-mar
+        dir="./logs/",
+        entity=args.wandb_entity,
+        project=args.wandb_project,
         config=vars(args),
         name=args.run_name,
         id=wandb_run_id,

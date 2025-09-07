@@ -599,22 +599,22 @@ class EBM(nn.Module):
         return samples
 
 
-def ebm_small(**kwargs):
+def small(**kwargs):
     """Energy-based model with DiT-S backbone"""
     return EBM(dit_model="DiT-S/1", **kwargs)
 
 
-def ebm_base(**kwargs):
+def base(**kwargs):
     """Energy-based model with DiT-B backbone"""
     return EBM(dit_model="DiT-B/1", **kwargs)
 
 
-def ebm_large(**kwargs):
+def large(**kwargs):
     """Energy-based model with DiT-L backbone"""
     return EBM(dit_model="DiT-L/1", **kwargs)
 
 
-def ebm_xlarge(**kwargs):
+def xlarge(**kwargs):
     """Energy-based model with DiT-XL backbone"""
     return EBM(dit_model="DiT-XL/1", **kwargs)
 
@@ -622,19 +622,19 @@ def ebm_xlarge(**kwargs):
 # Backward compatibility aliases for old pure_diffusion names
 def pure_diffusion_small(**kwargs):
     """DEPRECATED: Use ebm_small instead"""
-    return ebm_small(**kwargs)
+    return small(**kwargs)
 
 def pure_diffusion_base(**kwargs):
     """DEPRECATED: Use ebm_base instead"""
-    return ebm_base(**kwargs)
+    return base(**kwargs)
 
 def pure_diffusion_large(**kwargs):
     """DEPRECATED: Use ebm_large instead"""
-    return ebm_large(**kwargs)
+    return large(**kwargs)
 
 def pure_diffusion_xlarge(**kwargs):
     """DEPRECATED: Use ebm_xlarge instead"""
-    return ebm_xlarge(**kwargs)
+    return xlarge(**kwargs)
 
 # For backward compatibility in imports
 PureDiffusion = EBM

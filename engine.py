@@ -127,7 +127,9 @@ def train_one_epoch(model, vae,
 
         loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=False, do_backward=True)
         if (data_iter_step + 1) % accum_steps == 0 or (data_iter_step + 1) == len(data_loader):
-            loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True, do_backward=False)
+            grad_norm = loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True, do_backward=False)
+            if grad_norm is not None:
+                metric_logger.update(grad_norm=float(grad_norm) if not hasattr(grad_norm, "item") else grad_norm.item())
             optimizer.zero_grad()
 
             avg_loss = loss_sum / batch_count
@@ -317,8 +319,9 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
                    update_grad=False, do_backward=True)
                    
         if (data_iter_step + 1) % accum_steps == 0 or (data_iter_step + 1) == len(data_loader):
-            loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), 
-                       update_grad=True, do_backward=False)
+            grad_norm = loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True, do_backward=False)
+            if grad_norm is not None:
+                metric_logger.update(grad_norm=float(grad_norm) if not hasattr(grad_norm, "item") else grad_norm.item())
             optimizer.zero_grad()
 
             avg_loss = loss_sum / batch_count

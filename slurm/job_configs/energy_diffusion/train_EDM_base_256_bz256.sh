@@ -3,80 +3,77 @@
 # ===== USAGE: bash slurm/slurm_exec.sh ncsa_gh200 slurm/job_configs/energy_diffusion/train_EDM_base_256_bz256.sh =====
 # ===== NOTE: Remeber to change --array to the number of jobs you want to run =====
 
-#SBATCH --job-name=EDM-base-bz256-400k
-#SBATCH --array=0-0
-#SBATCH --output=logs/slurm/EDM-base-bztest/256/%A/EDM-base-%a.out
+#SBATCH --job-name=EDM_LR_GS_BS_1024
+#SBATCH --array=0
+#SBATCH --output=logs/slurm/256/EDM_LR_GS_BS_1024-%A-%a.log
 #SBATCH --time=48:00:00
-#SBATCH --gpus-per-node=2
+#SBATCH --gpus-per-node=4
+mkdir -p logs/slurm/256/
 
 # --- Environment Setup ---
 # Set these variables for your system:
-export REPO_ROOT="/work/hdd/bdta/aqian1/mar_ebwm"  # Change this to your repo path
+export REPO_ROOT="/work/hdd/bcsi/agladstone/mar_ebwm"  # Change this to your repo path
 export CACHE_ROOT="/work/nvme/bdta/aqian1/data"   # Change this to your cache path
 export IMAGENET1K_ROOT="/work/nvme/belh/aqian1/imagenet-1k"
 
-
-
 # --- Grid Search Parameters ---
-mcmc_steps=(0.0001 )
-learning_rates=(3e-6 )
+# mcmc_steps=(0.0001)
+learning_rates=(0.0001)
 # --- Calculate parameters for this job (generic for any list length) ---
 len_lr=${#learning_rates[@]}
-len_ms=${#mcmc_steps[@]}
+# len_ms=${#mcmc_steps[@]}
 
-total=$((len_lr * len_ms))
+total=$((len_lr))
 
 task_id=${SLURM_ARRAY_TASK_ID}
 
 # If request too many tasks, exit redundant tasks
 if [ -z "${task_id}" ]; then
-  echo "[ERROR] SLURM_ARRAY_TASK_ID is not set. Are you running this as an array job?" >&2
-  exit 1
-fi
-if [ "${task_id}" -ge "${total}" ]; then
-  echo "[INFO] SLURM_ARRAY_TASK_ID ${task_id} >= total combinations ${total}. Exiting redundant array task." >&2
-  exit 0
+  echo "[INFO] SLURM_ARRAY_TASK_ID is not set. Manually setting it to 0 to allow for running as a bash script." >&2
+  SLURM_ARRAY_TASK_ID=0
 fi
 
-lr_idx=$(( task_id / len_ms ))
-mcmc_idx=$(( task_id % len_ms ))
+# lr_idx=$(( task_id % len_ms ))
 
-step_size=${mcmc_steps[$mcmc_idx]}
-learning_rate=${learning_rates[$lr_idx]}
+# step_size=${mcmc_steps[$mcmc_idx]}
+learning_rate=${learning_rates[$SLURM_ARRAY_TASK_ID]}
+echo "learning_rate: ${learning_rate}"
 
 # --- Setup ---
 module load cuda/12.6.1
-source activate mar_gh200
+source activate ebm_gh200
 cd ${REPO_ROOT}
 
 # --- Parameters ---
-NUM_GPUS=2
-GRAD_ACCU=1
-BLR=${learning_rate}
+NUM_GPUS=1
+NUM_NODES=1
+GRAD_ACCU=2
+lr=${learning_rate}
 BATCH_SIZE=128
-EPOCHES=320
-WARMUP_EPOCHS=16
+EPOCHES=1000
+WARMUP_EPOCHS=10
 MODEL_TYPE=ebm
 MODEL=ebm_base
 NUM_EVAL_IMAGES=1000
 NUM_EVAL_STEPS=250
 IMG_SIZE=256
 ENERGY_GRAD_MULTIPLIER=1
-DIFFUSION_TIMESTEPS=500
+DIFFUSION_TIMESTEPS=1000
 EVAL_BATCH_SIZE=$((BATCH_SIZE / 4))
+step_size=0.0001
 
-EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE * GRAD_ACCU * NUM_GPUS))
+EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE * GRAD_ACCU * NUM_GPUS * NUM_NODES))
 
 
 # --- Run Name and Output Dir ---
-RUN_NAME="EDM-256-base-lr${BLR}-timesteps${DIFFUSION_TIMESTEPS}-bz${EFFECTIVE_BATCH_SIZE}-epo${EPOCHES}-c1k"
+RUN_NAME="EDM-256-base-lr${lr}-no_wd-timesteps${DIFFUSION_TIMESTEPS}-bz${EFFECTIVE_BATCH_SIZE}-epo${EPOCHES}-c1k"
 OUTPUT_DIR="${REPO_ROOT}/output/${RUN_NAME}"
 
 # --- Log Parameters ---
 echo "--- Starting Energy Diffusion Grid Search job ${SLURM_ARRAY_TASK_ID} ---"
 echo "Grid Parameters:"
 echo "  MCMC Step Size: ${step_size}"
-echo "  Learning Rate: ${BLR}"
+echo "  Learning Rate: ${lr}"
 echo "  Diffusion Time Steps: ${DIFFUSION_TIMESTEPS}"
 echo "Training Parameters:"
 echo "  Batch Size: ${EFFECTIVE_BATCH_SIZE}"
@@ -98,12 +95,14 @@ if [ -z "${MASTER_PORT}" ]; then
   fi
 fi
 echo "Using MASTER_PORT=${MASTER_PORT}"
+# TODO check this code make sure works for multinode and will work for bash as well
 
 # --- Training Command for Energy Diffusion ---
 torchrun \
   --nproc_per_node=${NUM_GPUS} \
   --master_addr=localhost \
   --master_port=${MASTER_PORT} \
+  --nnodes=${NUM_NODES} \
   main_ebm.py \
   \
   --run_name ${RUN_NAME} \
@@ -118,13 +117,15 @@ torchrun \
   --epochs ${EPOCHES} \
   --warmup_epochs ${WARMUP_EPOCHS} \
   --batch_size ${BATCH_SIZE} \
+  --lr ${lr} \
   --grad_accu ${GRAD_ACCU} \
-  --blr ${BLR} \
+  --weight_decay 0.0 \
   \
   --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size ${step_size} \
   --energy_grad_multiplier ${ENERGY_GRAD_MULTIPLIER} \
+  \
   --diffusion_timesteps ${DIFFUSION_TIMESTEPS} \
   \
   --use_cached \
