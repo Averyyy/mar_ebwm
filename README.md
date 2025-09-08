@@ -119,6 +119,8 @@ Download pre-trained VAE and energy diffusion models:
 python util/download.py
 ```
 
+[Login](https://docs.wandb.ai/ref/cli/wandb-login) to wandb using `wandb login` inside of that environment.
+
 For convenience, our pre-trained EBM models can be downloaded directly here as well:
 
 | EBM Model | FID-50K | Inception Score | #params |
@@ -150,50 +152,39 @@ See `slurm/job_configs/cache_latents.sh`.
 If you are using Slurm files, remember to change your environment variables at the top of every Slurm file you use.
 Check all paths before you run! Remember to cache in the correct path if you are using `--use_cached`.
 
-## Training
+## Running Code
 
-Default training command (EDM-Base, 500 diffusion steps, 80 epochs, batch size 128, base LR 9e-6):
-```bash
-torchrun --nproc_per_node=1 --nnodes=1 --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
-main_ebm.py \
-  --run_name ${RUN_NAME} \
-  --img_size 256 \
-  --vae_path pretrained_models/vae/kl16.ckpt \
-  --model_type ebm \
-  --model ebm_base \
-  --epochs 20 \
-  --warmup_epochs 1 \
-  --use_energy \
-  --use_innerloop_opt \
-  --mcmc_step_size 0.001 \
-  --diffusion_timesteps 500 \
-  --batch_size 128 \
-  --num_workers 32 \
-  --blr 9e-6 \
-  --use_cached \
-  --cached_path ${CACHED_ROOT} \
-  --cached_format ptshard \
-  --output_dir ${OUTPUT_DIR} \
-  --online_eval \
-  --eval_bsz 32 \
-  --eval_real_dataset ${EVAL_PATH} \
-  --num_sampling_steps 250 \
-  --num_images 1000
+Start by running a job script. There are two ways to do this:
+
+##### Running a bash script directly (quick start) when already have access to compute node:
+
+```
+bash job_scripts/energy_diffusion/energy_diffusion.sh
 ```
 
-Arguments:
-- `model_type`: to train energy diffusion, set to `ebm`.
+##### Running a bash script using slurm executor (recommended on HPC if slurm is installed):
+
+```
+bash slurm_executor.sh reference_a100 job_scripts/energy_diffusion/energy_diffusion.sh
+```
+
+- This method has a mandatory param (in this case `reference_a100`) which tells slurm_executor.sh how to build the slurm script (**Note**, *you need to tailor this and set the corresponding script according to your cluster.*). The available parameters are currently "reference_a100" (for your reference :). 
+- You can also just add a slurm header to the existing bash scripts and execute scripts using sbatch, which is more standard, but this `slurm_executor.sh` is super helpful for keeping code modular
+  - To add an HPC config type for slurm_executor.sh please see the reference script [job_scripts/slurm_headers/reference_a100.slurm](job_scripts/slurm_headers/reference_a100.slurm) and add the script name to [slurm_executor.sh](./slurm_executor.sh)
+
+The key parameters in these job scripts are *the RUN_NAME, MODEL_NAME, and MODEL_SIZE*. Make sure to ctrl/cmd d (edit 3 things at once) when changing these to change the log names as well in addition to the RUN_NAME. The model size *magically* automatically sets the numbers of layers, attention heads, embed dim, etc. :) Also make sure you set the wandb run information properly (entity and project).
+
+Key Arguments:
 - (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_ROOT}`.
 
 ## Guides
 
 ### Training pipeline
 1. Wandb logging:
-   - Install and login to wandb in your terminal, then in `util/misc.py`, in function `init_wandb`, set `project` in `wandb.init` to `energy-diffusion`.
+   - Make sure wandb is installed and you are logged in
    - If no `run_name` is specified, the run will not be uploaded to wandb web.
    - Resume logic is implemented by default. Resuming from a directory will load the wandb id and checkpoint and continue the same logging (if it exists).
    - Preview: set preview labels/frequency to show preview images on the wandb run.
-   - Other features: wandb watch (parameters/gradients), system section (GPU memory and utilization).
 2. Caching:
    - Cache format: `npz` (default); `ptshard` (recommended for GH200 GPUs; improves GPU utilization). When using `ptshard`, specify `--cache_format`.
    - Resizing: given a 256 image dataset, set effective image size to n (e.g., 64) to cache an n×n dataset.
