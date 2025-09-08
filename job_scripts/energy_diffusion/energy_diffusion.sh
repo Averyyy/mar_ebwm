@@ -1,6 +1,6 @@
 ### RESOURCE CONFIG ###
 
-#SBATCH --array=0-2
+#SBATCH --array=0
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
@@ -72,7 +72,6 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --cached_format ptshard \
 --num_workers 8 \
 \
---resume "./logs/output/${RUN_NAME}" \
 --output_dir "./logs/output/${RUN_NAME}" \
 --wandb_entity "ebwm_nlp" \
 --wandb_project "energy_diffusion_final" \

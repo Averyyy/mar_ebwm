@@ -38,8 +38,8 @@ learning_rates=(0.0001 0.0003 0.00003)
 
 # --- Set Key Hyperparameters ---
 LR=${learning_rates[$SLURM_ARRAY_TASK_ID]}
-BATCH_SIZE_PER_DEVICE=256
-GRAD_ACCU=1
+BATCH_SIZE_PER_DEVICE=128
+GRAD_ACCU=2
 EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE_PER_DEVICE * GRAD_ACCU * NUM_GPUS * NUM_NODES))
 RUN_NAME="${RUN_NAME//@BZ/${EFFECTIVE_BATCH_SIZE}}"; RUN_NAME="${RUN_NAME//@LR/${LR}}"
 echo "RUN_NAME: ${RUN_NAME}"
@@ -67,7 +67,6 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --cached_format ptshard \
 --num_workers 8 \
 \
---resume "./logs/output/${RUN_NAME}" \
 --output_dir "./logs/output/${RUN_NAME}" \
 --wandb_entity "ebwm_nlp" \
 --wandb_project "energy_diffusion_final" \
