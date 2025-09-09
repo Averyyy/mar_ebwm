@@ -29,7 +29,7 @@ echo "NUM_GPUS: ${NUM_GPUS}" # NOTE this defaults to all available Nvidia GPUs, 
 NUM_NODES="${SLURM_JOB_NUM_NODES:-${SLURM_NNODES:-1}}"
 echo "NUM_NODES: ${NUM_NODES}"
 
-source slurm/job_utils.sh # sets the MASTER_PORT, MASTER_ADDR
+source job_scripts/job_utils.sh # sets the MASTER_PORT, MASTER_ADDR
 
 # --- Slurm Arrays for Possible Grid Search ---
 
@@ -73,6 +73,7 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --num_workers 8 \
 \
 --output_dir "./logs/output/${RUN_NAME}" \
+--save_last_freq 20 \
 --wandb_entity "ebwm_nlp" \
 --wandb_project "energy_diffusion_final" \
 \
@@ -100,5 +101,5 @@ echo "--- Job Completed ---"
 # --fid_stats_file util/fid_stats/imagenet_64_stats.npz \
 # --eval_real_dataset ${IMAGENET1K_ROOT}/val \
 # --num_sampling_steps 250 \
-# --eval_bsz ${EVAL_BATCH_SIZE_PER_DEVICE // 4} \
+# --eval_bsz ${BATCH_SIZE_PER_DEVICE // 4} \
 # --num_images 1000 \

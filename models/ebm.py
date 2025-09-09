@@ -293,7 +293,7 @@ class EBM(nn.Module):
             t=t,
             model_kwargs={"y": labels}
         )
-        loss_mse = loss_dict["loss"]
+        loss_mse = loss_dict["loss"] #TODO redo this so just uses loss_dict["mse"], and works for diffusion models, fix line below
         total_loss = loss_mse.clone()
         
         # Optional loss components  

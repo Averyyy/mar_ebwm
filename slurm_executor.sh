@@ -43,7 +43,7 @@ fi
 echo "Active Conda environment: $(basename "$CONDA_PREFIX")"
 echo pwd: $(pwd)
 # Define the directory paths
-HEADER_DIR="./slurm/job_scripts/slurm_headers"
+HEADER_DIR="./job_scripts/slurm_headers"
 
 # Path to Slurm headers
 HEADER_FILE="${HEADER_DIR}/${HEADER_TYPE}.slurm"
@@ -76,7 +76,7 @@ if [ "$HEADER_TYPE" != "none" ] && [ ! -f "$HEADER_FILE" ]; then
 fi
 
 # Create a temporary file to hold the combined script
-TEMP_SCRIPT=$(mktemp ./slurm/job_scripts/temp_script_XXXXXX.slurm)
+TEMP_SCRIPT=$(mktemp ./job_scripts/temp_script_XXXXXX.slurm)
 
 # Ensure the temporary script is removed on exit
 trap 'rm -f "$TEMP_SCRIPT"' EXIT

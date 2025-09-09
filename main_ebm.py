@@ -73,7 +73,7 @@ def get_args_parser():
     parser.add_argument('--cfg_schedule', default="linear", type=str)
     parser.add_argument('--label_drop_prob', default=0.1, type=float)
     parser.add_argument('--eval_freq', type=int, default=40, help='evaluation frequency')
-    parser.add_argument('--save_last_freq', type=int, default=2, help='save last frequency')
+    parser.add_argument('--save_last_freq', type=int, default=20, help='save last frequency')
     parser.add_argument('--online_eval', action='store_true')
     parser.add_argument('--evaluate', action='store_true')
     parser.add_argument('--eval_bsz', type=int, default=64, help='generation batch size')
@@ -602,12 +602,12 @@ def main(args):
                 raise ValueError("No wandb step available")
         except:
             # Fallback: calculate from epoch (may cause step mismatch)
-            steps_per_epoch = len(data_loader_train) // args.grad_accu if args.grad_accu > 1 else len(data_loader_train)
+            steps_per_epoch = ((len(data_loader_train) + args.grad_accu - 1) // args.grad_accu) if args.grad_accu > 1 else len(data_loader_train)
             global_step = args.start_epoch * steps_per_epoch
             print(f"⚠️  Calculating global_step from epoch {args.start_epoch}: {global_step} (may cause wandb step mismatch)")
     elif args.start_epoch > 0:
         # Fallback: calculate from start epoch even without wandb
-        steps_per_epoch = len(data_loader_train) // args.grad_accu if args.grad_accu > 1 else len(data_loader_train)
+        steps_per_epoch = ((len(data_loader_train) + args.grad_accu - 1) // args.grad_accu) if args.grad_accu > 1 else len(data_loader_train)
         global_step = args.start_epoch * steps_per_epoch
         print(f"📈 Starting from global_step: {global_step} (calculated from epoch {args.start_epoch})")
     for epoch in range(args.start_epoch, args.epochs):
@@ -683,7 +683,7 @@ def main(args):
         # save checkpoint
         if epoch % args.save_last_freq == 0 or epoch + 1 == args.epochs:
             misc.save_model(args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                            loss_scaler=loss_scaler, epoch=epoch, ema_params=ema_params, epoch_name="last")
+                            loss_scaler=loss_scaler, epoch=epoch, ema_params=ema_params, epoch_name=None)
 
         # preview sampling
         if args.preview:

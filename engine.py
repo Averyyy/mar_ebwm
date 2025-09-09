@@ -83,10 +83,10 @@ def train_one_epoch(model, vae,
 
         # Calculate effective step (accounts for gradient accumulation)
         effective_step = data_iter_step // accum_steps
-        effective_steps_per_epoch = len(data_loader) // accum_steps
+        effective_steps_per_epoch = (len(data_loader) + accum_steps - 1) // accum_steps
         
         # we use a per iteration (instead of per epoch) lr scheduler
-        lr_sched.adjust_learning_rate(optimizer, effective_step / effective_steps_per_epoch + epoch, args)
+        lr_sched.adjust_learning_rate(optimizer, effective_step / max(1, effective_steps_per_epoch) + epoch, args)
 
         samples = samples.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
@@ -130,20 +130,18 @@ def train_one_epoch(model, vae,
             grad_norm = loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True, do_backward=False)
             if grad_norm is not None:
                 metric_logger.update(grad_norm=float(grad_norm) if not hasattr(grad_norm, "item") else grad_norm.item())
+            update_ema(ema_params, model_params, rate=args.ema_rate)
             optimizer.zero_grad()
 
             avg_loss = loss_sum / batch_count
+            avg_wandb_loss = wandb_loss_sum / batch_count
             metric_logger.update(loss=avg_loss)
+            metric_logger.update(wandb_loss=avg_wandb_loss)
             loss_sum = 0.0
+            wandb_loss_sum = 0.0
             batch_count = 0
 
         # torch.cuda.synchronize()  # Removed: causes GPU utilization drops
-
-        update_ema(ema_params, model_params, rate=args.ema_rate)
-
-        metric_logger.update(loss=loss_value * accum_steps)
-        # Add separate wandb loss metric for MSE-only logging
-        metric_logger.update(wandb_loss=wandb_loss_value * accum_steps)
 
         # Calculate iterations per second (using effective steps)
         current_time = time.time()
@@ -173,7 +171,7 @@ def train_one_epoch(model, vae,
     
     # Return effective global step for gradient accumulation
     if accum_steps > 1:
-        effective_steps_completed = len(data_loader) // accum_steps
+        effective_steps_completed = (len(data_loader) + accum_steps - 1) // accum_steps
         return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + effective_steps_completed
     else:
         return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)
@@ -322,19 +320,16 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
             grad_norm = loss_scaler(loss, optimizer, clip_grad=args.grad_clip, parameters=model.parameters(), update_grad=True, do_backward=False)
             if grad_norm is not None:
                 metric_logger.update(grad_norm=float(grad_norm) if not hasattr(grad_norm, "item") else grad_norm.item())
+            update_ema(ema_params, model_params, rate=args.ema_rate)
             optimizer.zero_grad()
 
             avg_loss = loss_sum / batch_count
+            avg_wandb_loss = wandb_loss_sum / batch_count
             metric_logger.update(loss=avg_loss)
+            metric_logger.update(wandb_loss=avg_wandb_loss)
             loss_sum = 0.0
+            wandb_loss_sum = 0.0
             batch_count = 0
-
-        # Update EMA parameters
-        update_ema(ema_params, model_params, rate=args.ema_rate)
-
-        # Update metrics
-        metric_logger.update(loss=loss_value * accum_steps)
-        metric_logger.update(wandb_loss=wandb_loss_value * accum_steps)
 
         # Calculate iterations per second
         current_time = time.time()
@@ -407,7 +402,7 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
     # Return effective global step for gradient accumulation
     accum_steps = args.grad_accu
     if accum_steps > 1:
-        effective_steps_completed = len(data_loader) // accum_steps
+        effective_steps_completed = (len(data_loader) + accum_steps - 1) // accum_steps
         return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + effective_steps_completed
     else:
         return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, global_step + len(data_loader)

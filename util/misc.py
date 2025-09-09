@@ -132,7 +132,7 @@ class MetricLogger(object):
         
         # Adjust display for gradient accumulation
         if hasattr(self.args, 'grad_accu') and self.args.grad_accu > 1:
-            total_effective_steps = len(iterable) // self.args.grad_accu
+            total_effective_steps = (len(iterable) + self.args.grad_accu - 1) // self.args.grad_accu
             space_fmt = ':' + str(len(str(total_effective_steps))) + 'd'
         else:
             total_effective_steps = len(iterable)
@@ -518,6 +518,8 @@ def save_model(args, epoch, model, model_without_ddp, optimizer,
 
     if is_main_process() and last_ckpt.exists():
         last_ckpt.replace(prev_ckpt)
+
+    print(f"Saving epoch_ckpt to: {epoch_ckpt}")
 
     if ema_params is not None:
         ema_state_dict = copy.deepcopy(model_without_ddp.state_dict())
