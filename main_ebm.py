@@ -237,6 +237,10 @@ def get_args_parser():
                         help='Enable streaming processing to overlap computation and data transfer for better GPU utilization')
     parser.add_argument('--stream_buffer_size', default=2, type=int,
                         help='Number of CUDA streams to use for streaming processing (default: 2)')
+    
+    parser.add_argument(
+        '--use_flow', action='store_true', help='Flag to start flow matching instead of diffusion'
+    )
 
     return parser
 
@@ -368,34 +372,9 @@ def main(args):
         contrasive_loss_scale=args.contrasive_loss_scale,
         mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
         energy_gradient_multiplier=args.energy_grad_multiplier,
+        use_flow=args.use_flow
     )
-        # else: # TODO fix this code is super confusing and wont even work??? redo to be cleaner, remove this branch p sure
-        #     # Fallback to default ebm model 
-        #     from models import EBM
-        #     model = EBM(
-        #         img_size=args.img_size,
-        #         vae_stride=args.vae_stride,
-        #         patch_size=args.patch_size,
-        #         vae_embed_dim=args.vae_embed_dim,
-        #         class_num=args.class_num,
-        #         class_dropout_prob=args.label_drop_prob,
-        #         num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
-        #         num_sampling_steps=int(args.num_sampling_steps),
-        #         dit_model=getattr(args, 'dit_model', 'DiT-B/2'),
-        #         use_energy=args.use_energy,
-        #         use_innerloop_opt=args.use_innerloop_opt,
-        #         always_accept_opt_steps=args.always_accept_opt_steps,
-        #         supervise_energy_landscape=args.supervise_energy_landscape,
-        #         mcmc_step_size=args.mcmc_step_size,
-        #         mcmc_num_steps=args.mcmc_num_steps,
-        #         linear_then_mean=args.linear_then_mean,
-        #         log_energy_accept_rate=args.log_energy_accept_rate,
-        #         learnable_mcmc_step_size=args.learnable_mcmc_step_size,
-        #         contrasive_loss_scale=args.contrasive_loss_scale,
-        #         mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
-        #         energy_gradient_multiplier=args.energy_grad_multiplier,
-        #     )
-
+    print("Running flow matching")
     # following timm: set wd as 0 for bias and norm layers
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 

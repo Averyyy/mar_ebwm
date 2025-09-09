@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from models.dit import DiT, DiT_models
+from flow_matching.solver.ode_solver import ODESolver
 
 class EBM(nn.Module):
     """
@@ -19,6 +19,10 @@ class EBM(nn.Module):
         # Model architecture
         dit_model="DiT-B/2",
         
+        # Flow paramters
+        use_flow=False,
+        ode_method='huen2',
+        ode_step_size=0.01,
         # Diffusion parameters
         num_diffusion_timesteps=1000,
         beta_schedule="linear",
@@ -63,6 +67,7 @@ class EBM(nn.Module):
         self.log_energy_accept_rate = log_energy_accept_rate
         self.learnable_mcmc_step_size = learnable_mcmc_step_size
         self.mcmc_num_steps = mcmc_num_steps
+        self.use_flow = use_flow
         
         # Create alpha parameter - learnable if specified, otherwise fixed
         if learnable_mcmc_step_size:
@@ -104,7 +109,12 @@ class EBM(nn.Module):
             learn_sigma=False,
             diffusion_steps=num_diffusion_timesteps,
         )
+
+        # Initialize flow
         
+        from flow import create_flow
+        self.train_flow = create_flow(num_diffusion_timesteps, ode_method, ode_step_size)
+
     # ---------------------------- CFG utilities ----------------------------
     def _has_unconditional_embedding(self) -> bool:
         """Return True if LabelEmbedder has an extra unconditional token."""
@@ -175,7 +185,7 @@ class EBM(nn.Module):
         return model_fn
 
     
-    def compute_contrastive_loss(self, x, t, labels):
+    def compute_contrastive_loss(self, x, t, labels, **kwargs):
         """
         Compute contrastive energy loss using positive and negative samples.
         
@@ -192,7 +202,10 @@ class EBM(nn.Module):
         
         # Generate negative samples through energy optimization
         x_neg_start = x + 3.0 * torch.randn_like(x)  # Start from perturbed version
-        x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
+        if self.use_flow:
+            x_neg_noisy = self.train_flow.generate_noisy_samples(x, t, noise)
+        else:
+            x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
         
         # Optimize negative samples using energy landscape with detached alpha (no gradient)
         alpha_detached = self.alpha.detach() if hasattr(self, 'alpha') and self.alpha.requires_grad else 0.01
@@ -204,18 +217,26 @@ class EBM(nn.Module):
         else:
             x_neg_opt = opt_result
         
-        # Predict x0 from optimized negative samples
-        alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
-        sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
-        sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
-        
-        # Predict x0 from the optimized noisy sample (reverse of q_sample)
-        x_neg_pred = (x_neg_opt - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_opt)) / sqrt_alpha_cumprod
-        x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
+        if self.use_flow:
+            x_neg_pred = self.train_flow.solve(x_neg_opt, t, labels, **kwargs)
+            x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
+        else:
+            # Predict x0 from optimized negative samples
+            alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
+            sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
+            sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
+            
+            # Predict x0 from the optimized noisy sample (reverse of q_sample)
+            x_neg_pred = (x_neg_opt - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_opt)) / sqrt_alpha_cumprod
+            x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
         
         # Create new noisy versions for energy computation
-        x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
-        x_neg_noisy_final = self.train_diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
+        if self.use_flow:
+            x_pos_noisy = self.train_flow.generate_noisy_samples(x, t, noise)
+            x_neg_noisy_final = self.train_flow.generate_noisy_samples(x_neg_pred, t, noise)
+        else:
+            x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
+            x_neg_noisy_final = self.train_diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
         
         # Compute energy for both positive and negative samples
         x_concat = torch.cat([x_pos_noisy, x_neg_noisy_final], dim=0)
@@ -246,7 +267,11 @@ class EBM(nn.Module):
         """
         # Add opt-step refinement loss that mimics inference process
         noise = torch.randn_like(x)
-        x_noisy_for_opt = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
+        
+        if self.use_flow:
+            x_noisy_for_opt = self.train_flow.generate_noisy_samples(x, t, noise)
+        else:
+            x_noisy_for_opt = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
         
         # Apply opt_step with always_accept and get energy differences
         original_always_accept = self.always_accept_opt_steps
@@ -287,12 +312,18 @@ class EBM(nn.Module):
         t = torch.randint(0, self.train_diffusion.num_timesteps, (bsz,), device=x.device)
         
         # Compute diffusion loss (both for standard and energy depending on the self.dit.use_energy)
-        loss_dict = self.train_diffusion.training_losses(
-            model=self.dit,
-            x_start=x,
-            t=t,
-            model_kwargs={"y": labels}
-        )
+        if self.use_flow:
+            loss_dict = self.train_flow.training_loss(
+                self.dit, x, t, model_kwargs={'y': labels}
+            )
+        else:
+            loss_dict = self.train_diffusion.training_losses(
+                model=self.dit,
+                x_start=x,
+                t=t,
+                model_kwargs={"y": labels}
+            )
+        
         loss_mse = loss_dict["loss"]
         total_loss = loss_mse.clone()
         
