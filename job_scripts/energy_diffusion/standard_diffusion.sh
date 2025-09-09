@@ -17,10 +17,6 @@ mkdir -p logs/slurm/img_256/
 module purge
 # these scripts are formatted similarly to the EBT codebase https://github.com/alexiglad/ebwm/tree/alexi_inference
 
-# --- Data Setup --- # NOTE you need to set these variables for your data:
-export CACHE_ROOT="/work/nvme/bdta/aqian1/data"
-export IMAGENET1K_ROOT="/work/nvme/belh/aqian1/imagenet-1k"
-
 # --- Set the MASTER_PORT, MASTER_ADDR, NUM_GPUS, and NUM_NODES ---
 NUM_GPUS=${SLURM_GPUS_ON_NODE:-$([ -n "${CUDA_VISIBLE_DEVICES:-}" ] && awk -F, '{print NF}' <<< "${CUDA_VISIBLE_DEVICES//[[:space:]]/}" || (nvidia-smi -L 2>/dev/null | wc -l || echo 1))}
 NUM_GPUS=${NUM_GPUS:-1}; [ "${NUM_GPUS}" -gt 0 ] || NUM_GPUS=1
@@ -63,7 +59,7 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --img_size 256 \
 --vae_path "pretrained_models/vae/kl16.ckpt" \
 --use_cached \
---cached_path ${CACHE_ROOT}/cached-imagenet1k-256-ptshard-16 \
+--cached_path ${IMAGENET1K_CACHE} \
 --cached_format ptshard \
 --num_workers 8 \
 \
