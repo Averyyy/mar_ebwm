@@ -163,7 +163,7 @@ def get_args_parser():
     parser.add_argument('--always_accept_opt_steps', action='store_true',
                         help='[PureDiffusion] When use_innerloop_opt=True, always accept optimization steps regardless of energy evaluation')
     parser.add_argument('--supervise_energy_landscape', action='store_true',
-                        help='[PureDiffusion] Use IRED-style energy landscape supervision during training')
+                        help='[PureDiffusion] Use IRED-style energy landscape contrastive supervision during training')
     
     parser.add_argument('--learnable_mcmc_step_size', action='store_true',
                         help='[PureDiffusion] Make MCMC step size (alpha) a learnable parameter instead of fixed')

@@ -79,7 +79,7 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 \
 --val \
 --val_batch_size ${BATCH_SIZE_PER_DEVICE} \
---val_freq 20 \
+--val_freq 10 \
 --val_data_path ${IMAGENET1K_ROOT}/val
 
 

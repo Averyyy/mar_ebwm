@@ -2,8 +2,6 @@
 # stream_imagenet_resume_split.sh
 set -euo pipefail
 
-# DIR="/fsx_1/user/mathiasl/intern/alexi/data/imagenet-1k-test" TODO remove this
-
 # --- CLI args: require --dir, optional --num-workers ---
 usage() { echo "Usage: $0 --dir <imagenet_root> [--num-workers <N>]"; exit 1; }
 DIR=""
@@ -77,8 +75,6 @@ for f in "${FILES[@]}"; do
 done
 
 echo "✅ All shards extracted under: $DIR/{train,val,test}"
-
-# python util/scripts/reorganize_imagenet_inplace.py --imagenet_root /fsx_1/user/mathiasl/intern/alexi/data/imagenet-1k --num_workers 8 --datasets train, val, test; TODO remove this line
 
 if python util/scripts/reorganize_imagenet_inplace.py \
   --imagenet_root "$DIR" \
