@@ -49,7 +49,7 @@ HEADER_DIR="./job_scripts/slurm_headers"
 HEADER_FILE="${HEADER_DIR}/${HEADER_TYPE}.slurm"
 
 # List of valid HEADER_TYPE values, feel free to add your own
-VALID_HEADERS=("ncsa_gh200" "ncsa_a100" "ncsa_a100_custom" "none")
+VALID_HEADERS=("ncsa_gh200" "ncsa_a100" "meta_mid" "meta_res" "none")
 
 # Helper Function to check if an element is in an array
 contains() {

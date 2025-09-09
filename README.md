@@ -1,30 +1,82 @@
-# Energy-Diffusion Outscales Diffusion
+# Energy Outscales Diffusion and Flow
 _Official PyTorch Implementation_
 
-<!-- arxiv field -->
+<!-- TODO update top to be similar to EBT repo, follow that structure p much entirely, same with bottom -->
 
-This is a PyTorch/GPU implementation of the paper [Energy-Diffusion Outscales Diffusion](#TODO) (#TODO ICLRbalabala).
+This is a PyTorch/GPU implementation of the paper [Energy-Diffusion Outscales Diffusion](#TODO).
 
 This repo contains:
 
 - 🪐 A simple PyTorch implementation of [Standard & Energy diffusion](models/ebm.py)
 - ⚡️ Pre-trained class-conditional energy diffusion models trained on ImageNet 64x64 & 256x256
 
-## Table of Contents
+<!-- TODO redo TOC -->
+<!-- ## Table of Contents
 - [Preparation](#preparation)
 - [Caching VAE Latents](#optional-caching-vae-latents)
 - [Training](#training)
 - [Evaluation (ImageNet 256x256)](#evaluation-imagenet-256x256)
 - [Directory explanation](#directory-explanation)
-- [Contact](#contact)
+- [Contact](#contact) -->
 
-## Preparation
+## Environment Setup
 
-### Dataset
-The repo is using Imagenet-1k which is available for download at [ImageNet](http://image-net.org/download). You could also download the dataset via [huggingface](https://huggingface.co/datasets/ILSVRC/imagenet-1k/tree/main/data). After downloading and unzipping, you could use `util/scripts/reorganize_imagenet_inplace.py` to reorganize the dataset from the original structure into a structure like this: 
+Download the code:
+```bash
+git clone git@github.com:Averyyy/mar_ebwm.git
+cd mar_ebwm
+```
+
+Set up the environment (make sure you have [conda](https://conda.io/) installed).
+If you are on a GH200 GPU, you can use the following command to create an environment called `ebm_gh200`:
+```bash
+chmod +x env_setup/setup_gh200.sh
+./env_setup/setup_gh200.sh
+```
+> Warning: running the script will remove & reinstall your current environment named `ebm_gh200`.
+> Theoretically, the environment should work on CUDA versions <= 12.6.1. (Tested on A100/GH200 GPUs.)
+
+Download pre-trained Stable Diffusion VAE:
+```bash
+python util/scripts/download.py
+```
+
+[Login](https://docs.wandb.ai/ref/cli/wandb-login) to wandb using `wandb login` inside of that environment.
+
+## Dataset Setup
+The repo is using ImageNet-1k which is available for download at [HuggingFace](https://huggingface.co/datasets/ILSVRC/imagenet-1k/tree/main/data) as well as [the imagenet website](http://image-net.org/download). We recommend downloading via HuggingFace as follows:
+
+
+Make sure you have huggingface-cli installed in your conda envionement:
+```bash
+pip install -U "huggingface_hub[cli]"
+```
+
+Login to your account in huggingface-cli:
+```bash
+huggingface-cli login
+```
+Go to [huggingface](https://huggingface.co/datasets/ILSVRC/imagenet-1k/tree/main/data), make sure your account has access to this dataset (if not request access)
+
+Set your $IMAGENET1K_ROOT environment variable:
+```bash
+echo 'export IMAGENET1K_ROOT="/path/to/your/imagenet/root/directory"' >> ~/.bashrc && source ~/.bashrc
+```
+
+Run the dataset_download script with the appropriate parameters (optionally set --num_workers approriately):
+```bash
+bash env_setup/dataset_download.sh --dir ${IMAGENET1K_ROOT}
+```
+
+(Optional) If the script did not succeed at automatic reorganization you may need to manually run the following command:
+```bash
+python util/scripts/reorganize_imagenet_inplace.py --imagenet_root ${IMAGENET1K_ROOT} --num_workers 32 --datasets train val test
+```
+
+The final format of your raw dataset should be as follows
 
 ```
-./
+IMAGENET1K_ROOT/
 ├── train/
 │   ├── n01440764/
 │   │   ├── n01440764_10022.JPEG
@@ -45,21 +97,7 @@ The repo is using Imagenet-1k which is available for download at [ImageNet](http
 │   └── ...
 ```
 
-There is also a file calld `util/imagenet_id_to_name.txt` to map the class id to the class name.
-
-## A step by step instruction on how to download huggingface imagenet1k dataset
-1. Make sure you have huggingface-cli installed in your conda envionement:
-```bash
-pip install -U "huggingface_hub[cli]"
-```
-
-2. Login to your accoundin huggingface-cli:
-```bash
-huggingface-cli login
-```
-Go to [huggingface](https://huggingface.co/datasets/ILSVRC/imagenet-1k/tree/main/data), make sure your account has access to this dataset
-
-3. Download all of the files in your desired directory:
+<!-- 3. Download all of the files in your desired directory:
 
 ```bash
 for f in train_images_0.tar.gz train_images_1.tar.gz train_images_2.tar.gz \
@@ -84,44 +122,42 @@ To speed up, you could also use:
 ```bash
 for tgz in *.tar.gz; do
   tar -I "pigz -p 16" -xvf "$tgz"
-done
-```
+done -->
 
-5. Reorganize the dataset in place:
+(Optional) Resize the images to another size, e.g. 64x64 (this can be useful for running smaller scale experiments):
 ```bash
-python util/scripts/reorganize_imagenet_inplace.py --imagenet_root /path/to/your/directory --num_workers 32 --datasets val test
+python util/scripts/resize_imgs.py --src_dir ${IMAGENET1K_ROOT}$ --dst_dir /path/to/your/target/directory --target_size 64 64 --target
 ```
 
-6. (optional) Resize the images to 64x64:
+Set your $IMAGENET1K_CACHE environment variable:
 ```bash
-python util/scripts/resize_imgs.py --src_dir /path/to/your/directory --dst_dir /path/to/your/target/directory --target_size 64 64 --target
+echo 'export IMAGENET1K_CACHE="/path/to/your/cache/directory"' >> ~/.bashrc && source ~/.bashrc
 ```
 
-### Installation
 
-Download the code:
+Then cache your VAE Latents for running faster experiments:
+
 ```bash
-git clone git@github.com:Averyyy/mar_ebwm.git
-cd mar_ebwm
+torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 \
+main_cache.py \
+--img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 \
+--batch_size 128 \
+--data_path ${IMAGENET1K_ROOT} --cached_path ${IMAGENET1K_CACHE} \
+--cache_format ptshard --cache_shard_size 64
 ```
 
-Set up the environment (make sure you have [conda](https://conda.io/) installed).
-If you are on a GH200 GPU, you can use the following command to create an environment called `ebm_gh200`:
-```bash
-chmod +x env_setup/setup_gh200.sh
-./env_setup/setup_gh200.sh
-```
-> Warning: running the script will remove & reinstall your current environment named `ebm_gh200`.
-> Theoretically, the environment should work on CUDA versions <= 12.6.1. (Tested on A100 GPUs.)
+<!-- Cache format:
+1. `npz`: default cache format. However, it might influence performance during dataloading on GPUs.
+2. `ptshard`: recommended shard format that is more efficient for dataloading on GPUs. -->
 
-Download pre-trained VAE and energy diffusion models:
-```bash
-python util/download.py
-```
+<!-- See `slurm/job_configs/cache_latents.sh`. -->
 
-[Login](https://docs.wandb.ai/ref/cli/wandb-login) to wandb using `wandb login` inside of that environment.
+In case you need it, there is a file called `util/imagenet_id_to_name.txt` to map the class id to the class name.
 
-For convenience, our pre-trained EBM models can be downloaded directly here as well:
+
+## Model Checkpoints
+
+Our pretrained EBM checkpoints can be downloaded using the links below using the script TODO:
 
 | EBM Model | FID-50K | Inception Score | #params |
 |---|---|---|---|
@@ -129,28 +165,10 @@ For convenience, our pre-trained EBM models can be downloaded directly here as w
 | [EBM-Large](#TODO) | #TODO | #TODO | 458M |
 | [EBM-XLarge](#TODO) | #TODO | #TODO | 675M |
 
-### (Optional) Caching VAE Latents
 
-Given that our data augmentation consists of simple center cropping and random flipping, the VAE latents can be pre-computed and saved to `CACHED_ROOT` to save computations during EBM training:
-
-```bash
-torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 \
-main_cache.py \
---img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 \
---batch_size 128 \
---data_path ${IMAGENET1K_ROOT} --cached_path ${CACHED_ROOT} \
---cache_format ptshard --cache_shard_size 64
-```
-
-Cache format:
-1. `npz`: default cache format. However, it might influence performance during dataloading on GH200 GPUs.
-2. `ptshard`: recommended shard format that is more efficient for dataloading on GH200 GPUs.
-
-See `slurm/job_configs/cache_latents.sh`.
-
-### Note
+<!-- ### Note
 If you are using Slurm files, remember to change your environment variables at the top of every Slurm file you use.
-Check all paths before you run! Remember to cache in the correct path if you are using `--use_cached`.
+Check all paths before you run! Remember to cache in the correct path if you are using `--use_cached`. -->
 
 ## Running Code
 
@@ -177,7 +195,7 @@ The key parameters in these job scripts are *the RUN_NAME, MODEL_NAME, and MODEL
 Key Arguments:
 - (Optional) To train with cached VAE latents, add `--use_cached --cached_path ${CACHED_ROOT}`.
 
-## Guides
+## Guides (TODO REDO MOST OF BELOW)
 
 ### Training pipeline
 1. Wandb logging:
@@ -326,7 +344,7 @@ You could decrease inference time by reducing the number of mcmc steps during sa
 - `main_cache.py`: main script for caching VAE latents
 - `engine.py`: training/inference engine
 
-A large portion of codes in this repo is based on [MAR](https://github.com/LTH14/mar) and [DiT](https://github.com/facebookresearch/DiT).
+A large portion of codes in this repo is based on [MAR](https://github.com/LTH14/mar), [DiT](https://github.com/facebookresearch/DiT), and [EBT](https://github.com/alexiglad/ebt).
 
 ## Contact
 

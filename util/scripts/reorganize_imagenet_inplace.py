@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-In-place reorganization of ImageNet val and test datasets
+In-place reorganization of ImageNet train, val, and test datasets
 Creates temporary reconstructed folders, verifies completion, then replaces originals
 """
 import os
@@ -26,6 +26,11 @@ def get_class_from_filename(filename, dataset_type):
         pattern = r'ILSVRC2012_test_\d+\.JPEG'
         if re.match(pattern, filename):
             return 'test_unknown'  # Test set has no class labels
+    elif dataset_type == 'train':
+        pattern = r'(n\d+)_\d+_n\d+\.JPEG'
+        match = re.match(pattern, filename)
+        if match:
+            return match.group(1)
     
     return None
 
@@ -85,6 +90,13 @@ def reorganize_dataset_inplace(imagenet_root, dataset_type, num_workers=32):
         src_dir = os.path.join(imagenet_root, 'test')
         construct_dir = os.path.join(imagenet_root, 'test_construct')
         final_dir = os.path.join(imagenet_root, 'test')
+
+    elif dataset_type == 'train':
+        src_dir = os.path.join(imagenet_root, 'train', 'images')
+        if not os.path.exists(src_dir):
+            src_dir = os.path.join(imagenet_root, 'train')
+        construct_dir = os.path.join(imagenet_root, 'train_construct')
+        final_dir = os.path.join(imagenet_root, 'train')
     
     print(f"Source: {src_dir}")
     print(f"Construct: {construct_dir}")
@@ -102,6 +114,9 @@ def reorganize_dataset_inplace(imagenet_root, dataset_type, num_workers=32):
     elif dataset_type == 'test':
         jpeg_files = [f for f in os.listdir(src_dir) 
                       if f.endswith('.JPEG') and 'ILSVRC2012_test_' in f]
+    elif dataset_type == 'train':
+        jpeg_files = [f for f in os.listdir(src_dir)
+                      if f.endswith('.JPEG') and re.match(r'n\d+_\d+_n\d+\.JPEG', f)]
     
     original_count = len(jpeg_files)
     print(f"Found {original_count} {dataset_type} images to reorganize")
@@ -119,7 +134,9 @@ def reorganize_dataset_inplace(imagenet_root, dataset_type, num_workers=32):
     ensure_dir(construct_dir)
     
     # Split files into batches for parallel processing
-    batch_size = max(1, len(jpeg_files) // num_workers)
+    # batch_size = max(1, len(jpeg_files) // num_workers)
+    MAX_BS=2000
+    batch_size = min(MAX_BS, max(1, len(jpeg_files) // (num_workers or 1)))
     file_batches = [jpeg_files[i:i + batch_size] 
                    for i in range(0, len(jpeg_files), batch_size)]
     
@@ -209,7 +226,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default=32,
                        help='Number of parallel workers')
     parser.add_argument('--datasets', nargs='+', default=['val', 'test'],
-                       choices=['val', 'test'], 
+                       choices=['val', 'test', 'train'], 
                        help='Which datasets to reorganize')
     
     args = parser.parse_args()
@@ -238,10 +255,11 @@ def main():
     
     if success_count == total_datasets:
         print("🎉 ALL DATASETS SUCCESSFULLY REORGANIZED!")
-        print("\nYou can now update your val_data_path to:")
-        print(f"{args.imagenet_root}/val")
+        # print("\nYou can now update your val_data_path to:")
+        # print(f"{args.imagenet_root}/val")
     else:
         print("⚠️  Some datasets failed reorganization. Check the output above.")
+        raise RuntimeError("Some datasets failed reorganization")
     
     return 0 if success_count == total_datasets else 1
 
