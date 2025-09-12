@@ -31,16 +31,7 @@ import copy
 import wandb
 
 def safe_load_ckpt(resume_dir):
-    last  = Path(resume_dir) / 'checkpoint-last.pth'
-    prev  = Path(resume_dir) / 'checkpoint-last-prev.pth'
-    try:
-        return torch.load(last, map_location='cpu', weights_only=False)
-    except Exception as e:
-        print(f"⚠️  {last.name} damaged {e}")
-        if prev.exists():
-            print("↪️  rollback checkpoint-last-prev.pth")
-            return torch.load(prev, map_location='cpu', weights_only=False)
-        raise
+    return torch.load(resume_dir, map_location='cpu', weights_only=False)
 
 def get_args_parser():
     parser = argparse.ArgumentParser('EBM training', add_help=False)
@@ -374,7 +365,6 @@ def main(args):
         energy_gradient_multiplier=args.energy_grad_multiplier,
         use_flow=args.use_flow
     )
-    print("Running flow matching")
     # following timm: set wd as 0 for bias and norm layers
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -405,7 +395,8 @@ def main(args):
 
     # resume training
     is_resuming_checkpoint = False
-    if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
+
+    if args.resume:
         checkpoint = safe_load_ckpt(args.resume)
         model_without_ddp.load_state_dict(checkpoint['model'])
         model_params = list(model_without_ddp.parameters())
@@ -620,10 +611,7 @@ def main(args):
             # Main evaluation with primary dtype
             evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
                      cfg=1.0, use_ema=True, global_step=global_step, eval_dtype=eval_dtype)
-            if not (args.cfg == 1.0 or args.cfg == 0.0):
-                evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
-                         log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step, eval_dtype=eval_dtype)
-            
+
             # Auxiliary evaluations with different dtypes
             for i, aux_dtype in enumerate(auxiliary_eval_dtypes):
                 aux_run_info = auxiliary_wandb_run_info[i] if i < len(auxiliary_wandb_run_info) else None
@@ -632,10 +620,7 @@ def main(args):
                 
                 evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
                          cfg=1.0, use_ema=True, global_step=global_step, eval_dtype=aux_dtype, auxiliary_wandb_run_info=aux_run_info)
-                if not (args.cfg == 1.0 or args.cfg == 0.0):
-                    evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
-                             log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step, eval_dtype=aux_dtype, auxiliary_wandb_run_info=aux_run_info)
-            
+
             torch.cuda.empty_cache()
 
         # Ensure main run is active before training (in case auxiliary evaluations changed wandb.run)

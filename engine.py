@@ -489,14 +489,6 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
         sampled_images = (sampled_images + 1) / 2
         if torch.isnan(sampled_images).any() or torch.isinf(sampled_images).any():
             print("nan detacted!")
-        
-        # if misc.is_main_process() and i == 0:
-        #     images_to_log = []
-        #     for b_id in range(min(5, sampled_images.size(0))):
-        #         gen_img = np.round(np.clip(sampled_images[b_id].numpy().transpose([1, 2, 0]) * 255, 0, 255))
-        #         label = labels_gen[b_id].item()
-        #         images_to_log.append(wandb.Image(gen_img, caption=f"Class {label}"))
-        #     wandb.log({"eval_images": images_to_log}, step=epoch)
 
         # distributed save
         for b_id in range(sampled_images.size(0)):
@@ -509,165 +501,51 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
 
     torch.distributed.barrier()
     time.sleep(10)
-
+    
     # back to no ema
     if use_ema:
         print("Switch back from ema")
         model_without_ddp.load_state_dict(model_state_dict)
 
-    # compute FID and IS
+    # Metrics calculations (FID & IS like MAR)
     if log_writer is not None:
-        # Check if we should use FID stats file (for any image size)
-        fid_stats_file_path = getattr(args, 'fid_stats_file', 'util/fid_stats/adm_in256_stats.npz')
-        use_fid_stats = getattr(args, 'use_fid_stats', False)
-        
-        if use_fid_stats and os.path.exists(fid_stats_file_path):
-            # Force use of precomputed FID stats for FID, but still use real dataset for KID/PRC if available
-            fid_statistics_file = fid_stats_file_path
-            if (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
-                os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
-                input2 = args.eval_real_dataset
-                print(f"Using FID stats file {fid_stats_file_path} for FID and real dataset for KID/PRC: {args.eval_real_dataset}")
-            else:
-                input2 = None
-                print(f"Using FID stats file {fid_stats_file_path} for FID calculation")
-        elif (hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None and 
-              os.path.exists(args.eval_real_dataset) and os.listdir(args.eval_real_dataset)):
-            # Use real dataset for all metrics
-            input2 = args.eval_real_dataset
-            fid_statistics_file = None
-            print(f"Using real dataset for all metrics: {args.eval_real_dataset}")
-        elif os.path.exists(fid_stats_file_path):
-            # Fallback to precomputed stats if available
+        if args.img_size == 256:
             input2 = None
-            fid_statistics_file = fid_stats_file_path
-            print(f"Using fallback FID stats file: {fid_stats_file_path}")
-            if hasattr(args, 'eval_real_dataset') and args.eval_real_dataset is not None:
-                print(f"Warning: eval_real_dataset path {args.eval_real_dataset} is invalid, falling back to FID stats")
+            fid_statistics_file = 'util/fid_stats/adm_in256_stats.npz'
         else:
-            # No reference data available
-            print("No valid reference dataset or FID stats file provided. Skipping FID/KID/PRC calculation.")
-            input2 = None
-            fid_statistics_file = None
-        # Enable KID and PRC only when input2 is available
-        enable_kid = input2 is not None
-        enable_prc = input2 is not None
-        
-        # Check if we can compute any metrics
-        if input2 is None and fid_statistics_file is None:
-            # No reference data available, set default values
-            fid = 0.0
-            inception_score = 0.0
-            kid_mean = 0.0
-            kid_std = 0.0
-            precision = 0.0
-            recall = 0.0
-            print("Skipping metrics calculation - no reference data available")
-        else:
-            # Build metrics calculation arguments
-            # Set KID subset size to accommodate small datasets
-            if args.kid_subset_size is not None:
-                kid_subset_size = args.kid_subset_size
-            else:
-                # Auto-select based on the smallest dataset size
-                kid_subset_size = min(args.num_images - 1, 1000)  # Default subset size
-            
-            metrics_kwargs = {
-                'input1': save_folder,
-                'cuda': True,
-                'isc': True,
-                'fid': True,
-                'kid': enable_kid,
-                'prc': enable_prc,
-                'verbose': False,
-                'samples_find_deep': True,
-                'samples_resize_and_crop': args.img_size,
-                'kid_subset_size': kid_subset_size,
-            }
-            
-            # Only add input2 and fid_statistics_file if they exist
-            if input2 is not None:
-                metrics_kwargs['input2'] = input2
-            if fid_statistics_file is not None:
-                metrics_kwargs['fid_statistics_file'] = fid_statistics_file
-                
-            metrics_dict = torch_fidelity.calculate_metrics(**metrics_kwargs)
-        
-            # Extract all computed metrics
-            fid = metrics_dict['frechet_inception_distance']
-            inception_score = metrics_dict['inception_score_mean']
-            kid_mean = metrics_dict.get('kernel_inception_distance_mean', 0.0)
-            kid_std = metrics_dict.get('kernel_inception_distance_std', 0.0) 
-            precision = metrics_dict.get('precision', 0.0)
-            recall = metrics_dict.get('recall', 0.0)
-        
-        # Print comprehensive metrics
-        print(f"=== Evaluation Metrics ===")
-        print(f"FID: {fid:.4f}")
-        print(f"IS: {inception_score:.4f}")
-        if enable_kid:
-            print(f"KID: {kid_mean:.6f} ± {kid_std:.6f}")
-        else:
-            print(f"KID: N/A (no reference dataset)")
-        if enable_prc:
-            print(f"Precision: {precision:.4f}")
-            print(f"Recall: {recall:.4f}")
-        else:
-            print(f"Precision/Recall: N/A (no reference dataset)")
-        print(f"=========================")
-        
-        # Log to wandb if available
-        if misc.is_main_process() and hasattr(args, 'run_name') and args.run_name is not None:
-            wandb_metrics = {
-                "fid": fid,
-                "inception_score": inception_score,
-                "kid_mean": kid_mean,
-                "kid_std": kid_std,
-                "precision": precision,
-                "recall": recall
-            }
-            step = global_step if global_step is not None else epoch
-            
-            if auxiliary_wandb_run_info is not None:
-                # Store main run info BEFORE any auxiliary operations
-                main_run_id = wandb.run.id if wandb.run else None
-                main_project = wandb.run.project if wandb.run else "energy-diffusion"
-                
-                # Resume existing auxiliary wandb run using stored ID
-                import wandb as wandb_aux
-                aux_run = wandb_aux.init(
-                    project=auxiliary_wandb_run_info['project'],
-                    id=auxiliary_wandb_run_info['id'],
-                    resume='must',
-                    reinit=True
-                )
-                aux_run.log(wandb_metrics, step=step)
-                aux_run.finish()
-                
-                # Restore main run as current using stored ID
-                if main_run_id:
-                    wandb.init(
-                        project=main_project,
-                        id=main_run_id,
-                        resume='must',
-                        reinit=True
-                    )
-            else:
-                # Log to main wandb run
-                wandb.log(wandb_metrics, step=step)
-        postfix = ""
-        if use_ema:
-           postfix = postfix + "_ema"
-        if not cfg == 1.0:
-           postfix = postfix + "_cfg{}".format(cfg)
-        log_writer.add_scalar('fid{}'.format(postfix), fid, epoch)
-        log_writer.add_scalar('is{}'.format(postfix), inception_score, epoch)
-        print("FID: {:.4f}, Inception Score: {:.4f}".format(fid, inception_score))
-        # remove temporal saving folder
-        shutil.rmtree(save_folder)
+            raise NotImplementedError
+    
+        metrics_dict = torch_fidelity.calculate_metrics(
+            input1=save_folder,
+            input2=input2,
+            fid_statistics_file=fid_statistics_file,
+            cuda=True,
+            isc=True,
+            fid=True,
+            kid=False,
+            prc=False,
+            verbose=False
+        )
 
+        fid = metrics_dict['frechet_inception_distance']
+        inception_score = metrics_dict['inception_score_mean']
+
+        postfix = ""
+
+        if use_ema:
+            postfix = postfix + "_ema"
+        if not cfg == 1.0:
+            postfix = postfix + "_cfg{}".format(cfg)
+        
+        log_writer.add_scalar("fid{}".format(postfix), fid, epoch)
+        log_writer.add_scalar('is{}'.format(postfix), inception_score, epoch)
+        print("fid{}".format(postfix), fid, epoch)
+    
+        shutil.rmtree(save_folder)
+    
     torch.distributed.barrier()
     time.sleep(10)
+
 
 
 def cache_latents(vae,

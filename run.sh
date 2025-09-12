@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bbathin/bash
 
 export WANDB_MODE=offline
 
@@ -10,12 +10,11 @@ LR=0.0001
 GRAD_ACCU=1
 IMAGENET1K_ROOT="/work/nvme/bdjz/shared/image_datasets/imagenet1k"  # <-- update
 
-torchrun --nproc_per_node=1 main_ebm.py \
+torchrun --nproc_per_node=2 main_ebm.py \
   --run_name ${RUN_NAME} \
   --model_type "ebm" \
   --model_size ${MODEL_SIZE} \
   \
-  --use_energy \
   --use_innerloop_opt \
   --mcmc_step_size 0.0001 \
   --energy_grad_multiplier 1 \
@@ -28,7 +27,7 @@ torchrun --nproc_per_node=1 main_ebm.py \
   --lr ${LR} \
   --grad_accu ${GRAD_ACCU} \
   --weight_decay 0.02 \
-  --data_path ${IMAGENET1K_ROOT}
+  --data_path ${IMAGENET1K_ROOT} \
   \
   --img_size 256 \
   --vae_path "pretrained_models/vae/kl16.ckpt" \
@@ -42,8 +41,7 @@ torchrun --nproc_per_node=1 main_ebm.py \
   --preview_interval 20 \
   --preview_labels 0,1,2,3,430,485,605,726,850 \
   \
-  --val \
-  --val_batch_size ${BATCH_SIZE_PER_DEVICE} \
-  --val_freq 20 \
-  --val_data_path ${IMAGENET1K_ROOT}/val \
-  --use_flow
+  --resume /work/hdd/bcsi/agladstone/mar_ebwm/logs/output/SDM-base-effbs_1024-lr_0.0001_repro_full_ds/checkpoint-80.pth \
+  --evaluate \
+  --eval_bsz 512 \
+  --num_images 50000

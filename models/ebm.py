@@ -23,6 +23,7 @@ class EBM(nn.Module):
         use_flow=False,
         ode_method='huen2',
         ode_step_size=0.01,
+
         # Diffusion parameters
         num_diffusion_timesteps=1000,
         beta_schedule="linear",
@@ -101,7 +102,6 @@ class EBM(nn.Module):
             learn_sigma=False,
             diffusion_steps=num_diffusion_timesteps,
         )
-        
         self.gen_diffusion = create_diffusion(
             timestep_respacing=str(num_sampling_steps),
             noise_schedule=beta_schedule,
@@ -144,42 +144,30 @@ class EBM(nn.Module):
             if B == 0:
                 return self.dit(x, t, kwargs.get("y"))
 
-            # Pad to even batch size if needed
-            pad = (B % 2) == 1
-            if pad:
-                x_pad = torch.cat([x, x[-1:].clone()], dim=0)
-                t_pad = torch.cat([t, t[-1:].clone()], dim=0)
-                y_in = kwargs.get("y")
-                if y_in is None:
-                    y_in = torch.randint(0, self.num_classes, (B,), device=x.device)
-                y_pad = torch.cat([y_in, y_in[-1:].clone()], dim=0)
-            else:
-                x_pad = x
-                t_pad = t
-                y_pad = kwargs.get("y")
-                if y_pad is None:
-                    y_pad = torch.randint(0, self.num_classes, (B,), device=x.device)
+            y_in = kwargs.get("y")
+            if y_in is None:
+                y_in = torch.randint(0, self.num_classes, (B,), device=x.device)
 
-            half = x_pad[: x_pad.shape[0] // 2]
-            x_combined = torch.cat([half, half], dim=0)
+            # Build conditional + unconditional batch
+            x_combined = torch.cat([x, x], dim=0)
+            t_combined = torch.cat([t, t], dim=0)
 
-            y_half = y_pad[: x_pad.shape[0] // 2]
-            y_uncond = torch.full_like(y_half, fill_value=self.num_classes)  # unconditional token index
-            y_combined = torch.cat([y_half, y_uncond], dim=0)
+            y_uncond = torch.full_like(y_in, fill_value=self.num_classes)  # unconditional token
+            y_combined = torch.cat([y_in, y_uncond], dim=0)
 
-            t_half = t_pad[: x_pad.shape[0] // 2]
-            t_combined = torch.cat([t_half, t_half], dim=0)
-
+            # Run DiT
             out = self.dit(x_combined, t_combined, y_combined)
 
+            # Split cond/uncond parts
             eps, rest = out[:, :3], out[:, 3:]
-            cond_eps, uncond_eps = torch.split(eps, eps.shape[0] // 2, dim=0)
-            guided_half = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-            eps_guided = torch.cat([guided_half, guided_half], dim=0)
-            out_guided = torch.cat([eps_guided, rest], dim=1)
+            cond_eps, uncond_eps = torch.split(eps, B, dim=0)
 
-            if pad:
-                out_guided = out_guided[:B]
+            # Apply CFG
+            guided_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+
+            # Stitch back together
+            out_guided = torch.cat([guided_eps, rest[:B]], dim=1)
+
             return out_guided
 
         return model_fn
@@ -577,7 +565,7 @@ class EBM(nn.Module):
         
         # Sample noise
         latent_size = self.img_size // self.vae_stride
-        shape = (bsz, self.vae_embed_dim, latent_size, latent_size)
+        shape = [bsz, self.vae_embed_dim, latent_size, latent_size]
         
         if cfg != 1.0:
             if self.use_energy and self.use_innerloop_opt:
