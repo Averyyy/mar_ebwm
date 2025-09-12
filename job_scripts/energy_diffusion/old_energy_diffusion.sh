@@ -95,7 +95,6 @@ if [ -z "${MASTER_PORT}" ]; then
   fi
 fi
 echo "Using MASTER_PORT=${MASTER_PORT}"
-# TODO check this code make sure works for multinode and will work for bash as well
 
 # --- Training Command for Energy Diffusion ---
 torchrun \

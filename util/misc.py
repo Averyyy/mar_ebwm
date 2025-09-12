@@ -224,6 +224,13 @@ class MetricLogger(object):
 
             if "grad_norm" in self.meters:
                 log_dict["grad_norm"] = float(self.meters["grad_norm"].value)
+
+            if "energy_loss" in self.meters:
+                log_dict["energy_loss"] = float(self.meters["energy_loss"].value)
+            if "opt_refinement_loss" in self.meters:
+                log_dict["opt_refinement_loss"] = float(self.meters["opt_refinement_loss"].value)
+            if "vb_loss" in self.meters:
+                log_dict["vb_loss"] = float(self.meters["vb_loss"].value)
             
             try:
                 import wandb

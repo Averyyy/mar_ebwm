@@ -22,6 +22,8 @@ class EBM(nn.Module):
         # Diffusion parameters
         num_diffusion_timesteps=1000,
         beta_schedule="linear",
+        learn_sigma=False,
+        sigma_small=True,
         
         # Class conditioning
         class_num=1000,
@@ -63,6 +65,7 @@ class EBM(nn.Module):
         self.log_energy_accept_rate = log_energy_accept_rate
         self.learnable_mcmc_step_size = learnable_mcmc_step_size
         self.mcmc_num_steps = mcmc_num_steps
+        self.learn_sigma = learn_sigma
         
         # Create alpha parameter - learnable if specified, otherwise fixed
         if learnable_mcmc_step_size:
@@ -77,7 +80,7 @@ class EBM(nn.Module):
             'in_channels': vae_embed_dim,
             'num_classes': class_num,
             'class_dropout_prob': class_dropout_prob,
-            'learn_sigma': False,
+            'learn_sigma': learn_sigma,
             'use_energy': use_energy,
             'linear_then_mean': linear_then_mean,
             'energy_gradient_multiplier': energy_gradient_multiplier,
@@ -89,20 +92,22 @@ class EBM(nn.Module):
         else:
             raise ValueError(f"Unknown DiT model: {dit_model}")
         
+        print(f"using diffusion params sigma_small:{sigma_small}, learn_sigma:{learn_sigma}, beta_schedule:{beta_schedule}")
+
         from diffusion import create_diffusion
         self.train_diffusion = create_diffusion(
             timestep_respacing="",  # Full timesteps during training
             noise_schedule=beta_schedule,
-            sigma_small=True,
-            learn_sigma=False,
+            sigma_small=sigma_small,
+            learn_sigma=learn_sigma,
             diffusion_steps=num_diffusion_timesteps,
         )
         
         self.gen_diffusion = create_diffusion(
-            timestep_respacing=str(num_sampling_steps),
+            timestep_respacing=str(num_sampling_steps), # less than during training
             noise_schedule=beta_schedule,
-            sigma_small=True,
-            learn_sigma=False,
+            sigma_small=sigma_small,
+            learn_sigma=learn_sigma,
             diffusion_steps=num_diffusion_timesteps,
         )
         
@@ -293,8 +298,9 @@ class EBM(nn.Module):
             x_start=x,
             t=t,
             model_kwargs={"y": labels}
-        )
-        loss_mse = loss_dict["loss"] #TODO redo this so just uses loss_dict["mse"], and works for diffusion models, fix line below
+        ) # has the keys wb, mse, loss by default
+
+        loss_mse = loss_dict["mse"] #TODO need to redo this for when using flow to do 'loss' conditionally
         total_loss = loss_mse.clone()
         
         # Optional loss components  
@@ -305,6 +311,10 @@ class EBM(nn.Module):
         if self.learnable_mcmc_step_size:
             refinement_loss = self.compute_refinement_loss(x, t, labels)
             total_loss += self.mcmc_refinement_loss_scale * refinement_loss
+
+        if self.learn_sigma:
+            vb_loss = loss_dict["vb"]
+            total_loss = loss_dict["loss"]
         
         if return_loss_dict:
             loss_dict = {
@@ -315,6 +325,8 @@ class EBM(nn.Module):
                 loss_dict['energy_loss'] = contrastive_loss.mean()
             if self.learnable_mcmc_step_size:
                 loss_dict['opt_refinement_loss'] = refinement_loss
+            if self.learn_sigma:
+                loss_dict['vb_loss'] = vb_loss.mean()
             return loss_dict
         else:
             return total_loss.mean()

@@ -146,7 +146,13 @@ def get_args_parser():
                          help="Type of model to run ('ebm' for pure diffusion, use --use_energy for energy-based diffusion)")
     # ---------------- Energy Diffusion args (re-added) ----------------
     parser.add_argument('--dit_model', type=str, default=None, help='[EnergyDiffusion] DiT model size, e.g. DiT-B/4. Overrides embed_dim, depth, num_heads')
-    parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='[EnergyDiffusion] Number of diffusion timesteps')
+
+    parser.add_argument('--diffusion_timesteps', default=1000, type=int, help='Number of diffusion timesteps')
+    parser.add_argument('--beta_schedule', default="linear", type=str, choices=["linear", "cosine"], help='Beta Schedule for diffusion model')
+    parser.add_argument('--learn_sigma', action='store_true', help='Whether or not sigma should be learned, cannot make true for ebm since we did not add support for another input head yet')
+    parser.add_argument('--sigma_small', action='store_true', help='Whether or not a non learned sigma is small or not')
+
+
     parser.add_argument('--contrasive_loss_scale', default=0.05, type=float, help='[EnergyDiffusion] Contrastive loss scale for energy supervision')
     parser.add_argument('--mcmc_refinement_loss_scale', default=0.1, type=float, help='[EnergyDiffusion] MCMC refinement loss scale for alpha learning')
     parser.add_argument('--linear_then_mean', action='store_true', help='[EnergyDiffusion] If set, EnergyLayer applies linear layers first then mean pooling')
@@ -344,7 +350,7 @@ def main(args):
     if args.patch_size != 1:
         raise NotImplementedError("args.patch_size != 1 not yet supported")
 
-    # TODO redo so just passes args so isnt so long? make actually clean
+    # TODO redo so just passes args so isnt so long? make actually clean... then reproduce
     # if args.model_type == "ebm":
     from models import ebm
     #     # Check if args.model specifies a ebm variant
@@ -357,6 +363,9 @@ def main(args):
         class_num=args.class_num,
         class_dropout_prob=args.label_drop_prob,
         num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
+        beta_schedule=args.beta_schedule,
+        sigma_small=args.sigma_small,
+        learn_sigma=args.learn_sigma,
         num_sampling_steps=int(args.num_sampling_steps),
         use_energy=args.use_energy,
         use_innerloop_opt=args.use_innerloop_opt,

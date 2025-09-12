@@ -104,12 +104,12 @@ def train_one_epoch(model, vae,
         # forward
         with torch.amp.autocast('cuda', dtype=train_dtype):
             # Handle wandb MSE-only logging for ebm model
-            if (args.model_type == "ebm" and 
-                hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
+            if (args.model_type == "ebm" and hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only) or (args.learn_sigma):
                 loss_result = model(x, labels, return_loss_dict=True)
                 loss = loss_result['total_loss'] / accum_steps
                 wandb_loss = loss_result['mse_loss'] / accum_steps
             else:
+                loss_result = None
                 loss = model(x, labels)
                 loss = loss / accum_steps
                 wandb_loss = loss
@@ -140,6 +140,14 @@ def train_one_epoch(model, vae,
             loss_sum = 0.0
             wandb_loss_sum = 0.0
             batch_count = 0
+
+            if loss_result is not None:
+                if "energy_loss" in loss_result:
+                    metric_logger.update(energy_loss=loss_result["energy_loss"])
+                if "opt_refinement_loss" in loss_result:
+                    metric_logger.update(opt_refinement_loss=loss_result["opt_refinement_loss"])
+                if "vb_loss" in loss_result:
+                    metric_logger.update(vb_loss=loss_result["vb_loss"])
 
         # torch.cuda.synchronize()  # Removed: causes GPU utilization drops
 
@@ -291,8 +299,7 @@ def train_one_epoch_streaming(model, vae, model_params, ema_params, data_loader,
         # Forward pass with current batch
         with torch.amp.autocast('cuda', dtype='bf16'):
             # Handle wandb MSE-only logging for ebm model
-            if (args.model_type == "ebm" and 
-                hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
+            if (args.model_type == "ebm" and hasattr(args, 'wandb_log_mse_only') and args.wandb_log_mse_only):
                 loss_result = model(x, labels, return_loss_dict=True)
                 loss = loss_result['total_loss'] / accum_steps
                 wandb_loss = loss_result['mse_loss'] / accum_steps
