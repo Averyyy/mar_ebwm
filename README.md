@@ -63,14 +63,14 @@ Set your $IMAGENET1K_ROOT environment variable:
 echo 'export IMAGENET1K_ROOT="/path/to/your/imagenet/root/directory"' >> ~/.bashrc && source ~/.bashrc
 ```
 
-Run the dataset_download script with the appropriate parameters (optionally set --num_workers approriately):
+Run the dataset_download script with the appropriate parameters (optionally set --num_workers):
 ```bash
-bash env_setup/dataset_download.sh --dir ${IMAGENET1K_ROOT}
+bash env_setup/dataset_download.sh --dir ${IMAGENET1K_ROOT} --num_workers 16
 ```
 
 (Optional) If the script did not succeed at automatic reorganization you may need to manually run the following command:
 ```bash
-python util/scripts/reorganize_imagenet_inplace.py --imagenet_root ${IMAGENET1K_ROOT} --num_workers 32 --datasets train val test
+python util/scripts/reorganize_imagenet_inplace.py --imagenet_root ${IMAGENET1K_ROOT} --num_workers 16 --datasets train val test
 ```
 
 The final format of your raw dataset should be as follows
@@ -110,7 +110,7 @@ do
 done
 ```
 
-4. Unzip the files:
+1. Unzip the files:
 ```bash
 cd /path/to/your/directory
 for tgz in *.tar.gz; do
@@ -138,7 +138,7 @@ echo 'export IMAGENET1K_CACHE="/path/to/your/cache/directory"' >> ~/.bashrc && s
 Then cache your VAE Latents for running faster experiments:
 
 ```bash
-torchrun --nproc_per_node=4 --nnodes=1 --node_rank=0 \
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 \
 main_cache.py \
 --img_size 256 --vae_path pretrained_models/vae/kl16.ckpt --vae_embed_dim 16 \
 --batch_size 128 \

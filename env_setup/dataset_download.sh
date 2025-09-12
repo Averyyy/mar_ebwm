@@ -2,14 +2,14 @@
 # stream_imagenet_resume_split.sh
 set -euo pipefail
 
-# --- CLI args: require --dir, optional --num-workers ---
-usage() { echo "Usage: $0 --dir <imagenet_root> [--num-workers <N>]"; exit 1; }
+# --- CLI args: require --dir, optional --num_workers ---
+usage() { echo "Usage: $0 --dir <imagenet_root> [--num_workers <N>]"; exit 1; }
 DIR=""
 NUM_WORKERS=8
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) DIR="${2:-}"; shift 2 ;;
-    --num-workers) NUM_WORKERS="${2:-}"; shift 2 ;;
+    --num_workers) NUM_WORKERS="${2:-}"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "Unknown arg: $1"; usage ;;
   esac
@@ -82,11 +82,12 @@ if python util/scripts/reorganize_imagenet_inplace.py \
   --datasets train val test; then
   echo "✅ Reorganization succeeded."
 else
-  echo "❌ Reorganization failed, may need to call util/scripts/reorganize_imagenet_inplace.py manually using the following command:
-  python util/scripts/reorganize_imagenet_inplace.py \
+  cat <<'MSG'
+❌ Reorganization failed, may need to call util/scripts/reorganize_imagenet_inplace.py manually using the following command:
+python util/scripts/reorganize_imagenet_inplace.py \
   --imagenet_root "$DIR" \
   --num_workers "$NUM_WORKERS" \
-  --datasets train val test;
-  "
+  --datasets train val test
+MSG
   exit 1
 fi

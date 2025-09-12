@@ -7,9 +7,9 @@
 
 ### LOG CONFIG ###
 
-#SBATCH --job-name=EDM-base-effbs_@BZ-lr_@LR
-#SBATCH --output=logs/slurm/img_256/EDM-base-effbs_@BZ-lr_@LR%A-%a.log
-RUN_NAME="EDM-base-effbs_@BZ-lr_@LR"
+#SBATCH --job-name=EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_100
+#SBATCH --output=logs/slurm/img_256/EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_100%A-%a.log
+RUN_NAME="EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_100"
 # NOTE ctrl d ALL THREE of above to modify job-name, output, and RUN_NAME (which should all be the same)
 # MODEL_TYPE="${RUN_NAME%%-*}" # unused for now
 MODEL_SIZE="${RUN_NAME#*-}"; MODEL_SIZE="${MODEL_SIZE%%-*}"
@@ -48,9 +48,8 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --model_size ${MODEL_SIZE} \
 \
 --use_energy \
---use_innerloop_opt \
 --mcmc_step_size 0.0001 \
---energy_grad_multiplier 1 \
+--energy_grad_multiplier 100 \
 \
 --diffusion_timesteps 1000 \
 \
@@ -66,10 +65,10 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --use_cached \
 --cached_path ${IMAGENET1K_CACHE} \
 --cached_format ptshard \
---num_workers 8 \
+--num_workers 10 \
 \
 --output_dir "./logs/output/${RUN_NAME}" \
---save_last_freq 20 \
+--save_last_freq 10 \
 --wandb_entity "ebwm_nlp" \
 --wandb_project "energy_diffusion_final" \
 \
@@ -80,7 +79,10 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --val \
 --val_batch_size ${BATCH_SIZE_PER_DEVICE} \
 --val_freq 10 \
---val_data_path ${IMAGENET1K_ROOT}/val
+--val_data_path ${IMAGENET1K_ROOT}/val \
+\
+--train_dtype "fp32" \
+--eval_dtype "fp32" \
 
 
 echo "--- Job Completed ---"

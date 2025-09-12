@@ -169,6 +169,8 @@ def get_args_parser():
                         help='[PureDiffusion] Make MCMC step size (alpha) a learnable parameter instead of fixed')
     parser.add_argument('--energy_grad_multiplier', default=1.0, type=float,
                         help='[PureDiffusion] Multiplier for energy gradients used as diffusion score')
+    parser.add_argument('--zero_init_final_e_layer', action='store_true', help='zero init final layer, like dit paper')
+
     parser.add_argument('--langevin_noise_std', default=0.01, type=float, help='[EnergyMLP] Langevin dynamics noise standard deviation')
     parser.add_argument('--enable_amp_eval', action='store_true',
                         help='[Evaluation] Enable mixed precision (AMP) during evaluation for speedup')
@@ -299,7 +301,7 @@ def main(args):
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=args.batch_size,
-        num_workers=total_num_workers,
+        num_workers=args.num_workers,
         pin_memory=args.pin_mem,
         drop_last=False,
         persistent_workers=True,
@@ -324,7 +326,7 @@ def main(args):
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
             batch_size=args.val_batch_size,
-            num_workers=total_num_workers,
+            num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False,
             persistent_workers=True,
@@ -368,6 +370,7 @@ def main(args):
         contrasive_loss_scale=args.contrasive_loss_scale,
         mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
         energy_gradient_multiplier=args.energy_grad_multiplier,
+        zero_init_final_e_layer=args.zero_init_final_e_layer,
     )
         # else: # TODO fix this code is super confusing and wont even work??? redo to be cleaner, remove this branch p sure
         #     # Fallback to default ebm model 
@@ -613,6 +616,11 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
+
+        # save checkpoint
+        if epoch % args.save_last_freq == 0 or epoch + 1 == args.epochs:
+            misc.save_model(args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+                            loss_scaler=loss_scaler, epoch=epoch, ema_params=ema_params, epoch_name=None)
             
         # validation
         if (args.val) and (epoch % args.val_freq == 0):
@@ -679,11 +687,6 @@ def main(args):
             global_step=global_step,
             train_dtype=train_dtype
         )
-
-        # save checkpoint
-        if epoch % args.save_last_freq == 0 or epoch + 1 == args.epochs:
-            misc.save_model(args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                            loss_scaler=loss_scaler, epoch=epoch, ema_params=ema_params, epoch_name=None)
 
         # preview sampling
         if args.preview:

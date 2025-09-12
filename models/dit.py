@@ -134,22 +134,22 @@ class EnergyLayer(nn.Module):
     def __init__(self, input_dim, linear_then_mean=False):
         super().__init__()
         self.linear_then_mean = linear_then_mean
-        self.energy_head = nn.Sequential(
-            nn.Linear(input_dim, input_dim // 2),
+        self.linear = nn.Sequential(
+            nn.Linear(input_dim, input_dim * 2),
             nn.SiLU(),
-            nn.Linear(input_dim // 2, 1)
+            nn.Linear(input_dim * 2, 1)
         )
     
     def forward(self, x):
         # x: (N, T, D) -> energy: (N, 1)
         if self.linear_then_mean:
             # Apply linear layers first, then mean
-            x_transformed = self.energy_head(x)  # (N, T, 1)
+            x_transformed = self.linear(x)  # (N, T, 1)
             energy = x_transformed.mean(dim=1)   # (N, 1)
         else:
             # Original: mean first, then linear layers
             x_pooled = x.mean(dim=1)  # (N, D)
-            energy = self.energy_head(x_pooled)  # (N, 1)
+            energy = self.linear(x_pooled)  # (N, 1)
         return energy
 
 
@@ -192,6 +192,7 @@ class DiT(nn.Module):
         use_energy=False,
         linear_then_mean=False,
         energy_gradient_multiplier=1.0,
+        zero_init_final_e_layer=False
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -204,6 +205,7 @@ class DiT(nn.Module):
             self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
+        self.zero_init_final_e_layer = zero_init_final_e_layer
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
@@ -222,7 +224,6 @@ class DiT(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self):
-        # Initialize transformer layers:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight)
@@ -253,22 +254,25 @@ class DiT(nn.Module):
 
         # Zero-out output layers:
         if self.use_energy:
-            # nn.init.constant_(self.energy_layer.linear.weight, 0)
-            # nn.init.constant_(self.energy_layer.linear.bias, 0)
-            pass #TODO try adding this to see if helps
-        else:
+            if self.zero_init_final_e_layer: #NOTE this does not learn anything
+                print("zero initializing final energy layer")
+                for layer in self.energy_layer.linear:
+                    if isinstance(layer, nn.Linear):
+                        nn.init.constant_(layer.weight, 0)
+                        if layer.bias is not None:
+                            nn.init.constant_(layer.bias, 0)
+            else:
+                for layer in self.energy_layer.linear:
+                    if isinstance(layer, nn.Linear):
+                        nn.init.xavier_uniform_(layer.weight)
+                        if layer.bias is not None:
+                            nn.init.constant_(layer.bias, 0)
+        else: # always zero inits final adaln layer for base diffusion
             nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
             nn.init.constant_(self.final_layer.linear.weight, 0)
             nn.init.constant_(self.final_layer.linear.bias, 0)
-        
-        # Initialize energy layer if it exists:
-        if hasattr(self, 'energy_layer'):
-            for layer in self.energy_layer.energy_head:
-                if isinstance(layer, nn.Linear):
-                    nn.init.xavier_uniform_(layer.weight)
-                    if layer.bias is not None:
-                        nn.init.constant_(layer.bias, 0)
+
 
     def unpatchify(self, x):
         """

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --account=belh-dtai-gh # fill out with your allocation/account
+#SBATCH --account=bcsi-dtai-gh # fill out with your allocation/account
 #SBATCH --partition=ghx4
 ### NODE/CPU/MEM/GPU  ###
 #SBATCH --mem-per-cpu=2G

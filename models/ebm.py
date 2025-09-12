@@ -43,7 +43,7 @@ class EBM(nn.Module):
         mcmc_refinement_loss_scale=0.1,
         log_energy_accept_rate=False,
         energy_gradient_multiplier=1.0,
-        
+        zero_init_final_e_layer=False,
         **kwargs
     ):
         super().__init__()
@@ -81,6 +81,7 @@ class EBM(nn.Module):
             'use_energy': use_energy,
             'linear_then_mean': linear_then_mean,
             'energy_gradient_multiplier': energy_gradient_multiplier,
+            'zero_init_final_e_layer': zero_init_final_e_layer
         }
         
         if dit_model in DiT_models:
