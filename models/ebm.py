@@ -157,18 +157,13 @@ class EBM(nn.Module):
 
             # Run DiT
             out = self.dit(x_combined, t_combined, y_combined)
-
             # Split cond/uncond parts
-            eps, rest = out[:, :3], out[:, 3:]
-            cond_eps, uncond_eps = torch.split(eps, B, dim=0)
+            cond_eps, uncond_eps = torch.split(out, B, dim=0)
 
             # Apply CFG
             guided_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
 
-            # Stitch back together
-            out_guided = torch.cat([guided_eps, rest[:B]], dim=1)
-
-            return out_guided
+            return guided_eps
 
         return model_fn
 
@@ -389,14 +384,15 @@ class EBM(nn.Module):
         if not self.use_energy:
             return x
         
-        # Calculate adaptive steps if not provided
-        if step is None:
-            step = self.get_adaptive_steps(t, keep_grad)
+        # # Calculate adaptive steps if not provided
+        # if step is None:
+        #     step = self.get_adaptive_steps(t, keep_grad)
             
         # Use learnable alpha parameter, with minimal clamping for stability
         # alpha = torch.clamp(self.alpha, min=1e-10, max=10.0) if step_size is None else step_size
-        alpha = self.alpha if step_size is None else step_size
-        # print(f"🔧 opt_step: steps={step}, alpha={alpha.item():.2e} (raw_alpha={self.alpha.item():.2e})")
+        #alpha = self.alpha if step_size is None else step_size
+        alpha = step_size
+            # print(f"🔧 opt_step: steps={step}, alpha={alpha.item():.2e} (raw_alpha={self.alpha.item():.2e})")
         
         # Initialize tracking
         total_accept_count = 0
@@ -418,11 +414,11 @@ class EBM(nn.Module):
                     x_new = x_opt + alpha * gradients.float()  # Gradient ascent for training
                 else:
                     x_new = x_opt - alpha * gradients.float()  # Gradient descent for inference
-                
-                # Use generation schedule's alphas_cumprod to match sampling timesteps
-                alpha_cumprod = torch.from_numpy(self.gen_diffusion.alphas_cumprod).float().to(t.device)[t]
-                max_val = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1) * 2.0
-                x_new = torch.clamp(x_new, -max_val, max_val)
+                    
+                #Use generation schedule's alphas_cumprod to match sampling timesteps
+                # sqrt_alpha_cumprod = _extract_into_tensor(self.gen_diffusion.sqrt_alphas_cumprod, t, (1,))[0].item()
+                # max_val =  alpha_cumprod * 2.0
+                # x_new = torch.clamp(x_new, -max_val, max_val)
                 
                 # Check if energy decreased, if not, reject the step (unless always_accept_opt_steps is True)
                 if not (self.use_innerloop_opt and self.always_accept_opt_steps):
@@ -466,7 +462,10 @@ class EBM(nn.Module):
         """
         device = next(self.dit.parameters()).device
         bsz = labels.shape[0]
+
+        step_sizes = self.gen_diffusion.betas / (1 - self.gen_diffusion.alphas_cumprod) / 1000
         
+
         # Initialize with noise
         x = torch.randn(bsz, *shape, device=device)
         
@@ -483,7 +482,7 @@ class EBM(nn.Module):
             timesteps_iter = enumerate(tqdm(timesteps, desc="Sampling", leave=False))
         else:
             timesteps_iter = enumerate(timesteps)
-            
+        
         # Select model used by diffusion at each step (with or without CFG)
         model_for_sampling = self._make_cfg_model(cfg) if cfg != 1.0 else self.dit
 
@@ -496,26 +495,26 @@ class EBM(nn.Module):
                     model_for_sampling,
                     x,
                     t, 
-                    model_kwargs={"y": labels}
+                    model_kwargs={"y": labels},
+                    clip_denoised=True
                 )
                 x = out["sample"]
-            
+
             if self.use_energy and self.use_innerloop_opt:
                 # Use adaptive steps - automatically adjusts based on timestep and inference context
                 if self.log_energy_accept_rate:
-                    x, accept_count, step_count = self.opt_step(x, t, labels, step=None)
+                    x, accept_count, step_count = self.opt_step(x, t, labels, step=1, step_size=step_sizes[t_val])
                     total_accept_count += accept_count
                     total_step_count += step_count
                 else:
-                    x = self.opt_step(x, t, labels, step=None)
-        
+                    x = self.opt_step(x, t, labels, step=1, step_size=step_sizes[t_val])
+
         # Log overall accept rates after sampling completes
         if self.log_energy_accept_rate and total_step_count > 0:
             accept_rate_percent = (total_accept_count / total_step_count) * 100
             avg_accepted_per_pic = total_accept_count // bsz if bsz > 0 else 0
             total_steps_per_pic = total_step_count // bsz if bsz > 0 else 0
             print(f"Energy diffusion accept rate: {avg_accepted_per_pic}/{total_steps_per_pic} steps ({accept_rate_percent:.1f}%) across {bsz} pictures")
-            
             # Log to wandb if available and run_name is set
             try:
                 import wandb
@@ -527,7 +526,7 @@ class EBM(nn.Module):
                     })
             except (ImportError, AttributeError):
                 pass  # wandb not available or not initialized
-                
+
         return x
     
     def sample_tokens(
@@ -539,7 +538,8 @@ class EBM(nn.Module):
         labels=None, 
         temperature=1.0,  # Ignored
         progress=False,
-        gt_prefix_tokens=None,  # Ignored
+        gt_prefix_tokens=None,  # Ignored,
+        steps=1,
         **kwargs
     ):
         """
@@ -606,6 +606,28 @@ class EBM(nn.Module):
             else:
                 # Use gen_diffusion with reduced timesteps
                 print(f"📝 Using STANDARD sampling (use_energy={self.use_energy}, use_innerloop_opt={self.use_innerloop_opt})")
+                
+                # samples = self.gen_diffusion.p_sample_loop(
+                #     model=self.dit,
+                #     shape=shape,
+                #     clip_denoised=True,
+                #     model_kwargs={"y": labels},
+                #     cond_fn=None,
+                #     use_inner_opt=False,
+                #     progress=True,
+                #     device=device
+                # )
+                # samples = self.gen_diffusion.unified_p_sample_loop(
+                #     model=self.dit,
+                #     shape=shape,
+                #     clip_denoised=True,
+                #     model_kwargs={"y": labels},
+                #     cond_fn=None,
+                #     device=device,
+                #     progress=progress,
+                #     steps=steps,
+                #     use_energy=self.use_energy
+                # )
                 samples = self.gen_diffusion.p_sample_loop(
                     model=self.dit,
                     shape=shape,
@@ -615,6 +637,8 @@ class EBM(nn.Module):
                     device=device,
                     progress=progress,
                 )
+
+
         return samples
 
 

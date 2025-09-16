@@ -172,6 +172,8 @@ class GaussianDiffusion:
         self.num_timesteps = int(betas.shape[0])
 
         alphas = 1.0 - betas
+        self.alphas = alphas
+        self.sqrt_recip_alphas = 1 / np.sqrt(alphas)
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
         self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0)
@@ -250,6 +252,95 @@ class GaussianDiffusion:
             == x_start.shape[0]
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
+
+    def unified_p_mean_variance(self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None, use_energy=False, steps=1):
+        """
+        Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
+        the initial x, x_0.
+        :param model: the model, which takes a signal and a batch of timesteps
+                      as input.
+        :param x: the [N x C x ...] tensor at time t.
+        :param t: a 1-D Tensor of timesteps.
+        :param clip_denoised: if True, clip the denoised signal into [-1, 1].
+        :param denoised_fn: if not None, a function which applies to the
+            x_start prediction before it is used to sample. Applies before
+            clip_denoised.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :return: a dict with the following keys:
+                 - 'mean': the model mean output.
+                 - 'variance': the model variance output.
+                 - 'log_variance': the log of 'variance'.
+                 - 'pred_xstart': the prediction for x_0.
+        """
+        if model_kwargs is None:
+            model_kwargs = {}
+
+        B, C = x.shape[:2]
+        assert t.shape == (B,)
+        model_output = model(x, t, **model_kwargs)
+        if isinstance(model_output, tuple):
+            model_output, extra = model_output
+        else:
+            extra = None
+        
+        if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
+            assert model_output.shape == (B, C * 2, *x.shape[2:])
+            model_output, model_var_values = th.split(model_output, C, dim=1)
+            min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
+            max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
+            # The model_var_values is [-1, 1] for [min_var, max_var].
+            frac = (model_var_values + 1) / 2
+            model_log_variance = frac * max_log + (1 - frac) * min_log
+            model_variance = th.exp(model_log_variance)
+        else:
+            model_variance, model_log_variance = {
+                # for fixedlarge, we set the initial (log-)variance like so
+                # to get a better decoder log likelihood.
+                ModelVarType.FIXED_LARGE: (
+                    np.append(self.posterior_variance[1], self.betas[1:]),
+                    np.log(np.append(self.posterior_variance[1], self.betas[1:])),
+                ),
+                ModelVarType.FIXED_SMALL: (
+                    self.posterior_variance,
+                    self.posterior_log_variance_clipped,
+                ),
+            }[self.model_var_type]
+            model_variance = _extract_into_tensor(model_variance, t, x.shape)
+            model_log_variance = _extract_into_tensor(model_log_variance, t, x.shape)
+        def process_xstart(x):
+            if denoised_fn is not None:
+                x = denoised_fn(x)
+            if clip_denoised:
+                return x.clamp(-1, 1)
+            return x
+
+        if self.model_mean_type == ModelMeanType.START_X:
+            pred_xstart = process_xstart(model_output)
+        else:
+            pred_xstart = process_xstart(
+                self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output)
+            )
+
+        _, _, posterior_log_variance = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
+        if (t < 100).all():
+            steps=steps
+        else:
+            steps=1
+        model_mean, total_accept_count, total_step_count = self.opt_step(model, x, t, steps, model_kwargs, x.min(), x.max(), use_energy=use_energy)
+
+        assert model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape
+        return {
+            "mean": model_mean,
+            "variance": model_variance,
+            "log_variance": model_log_variance,
+            'post_log_variance': posterior_log_variance,
+            "pred_xstart": pred_xstart,
+            "extra": extra,
+            "total_accept_count": total_accept_count,
+            "total_step_count": total_step_count
+        }
+    
 
     def p_mean_variance(self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None):
         """
@@ -330,6 +421,61 @@ class GaussianDiffusion:
             "pred_xstart": pred_xstart,
             "extra": extra,
         }
+    
+    def opt_step(
+        self,
+        model,
+        x,
+        t,
+        steps=1,
+        model_kwargs=None,
+        min_val=-10,
+        max_val=10,
+        use_energy=False
+    ):
+        alpha_t = _extract_into_tensor(self.alphas, t, x.shape)
+        alpha_bar_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+        sqrt_recip_alpha = 1.0 / th.sqrt(alpha_t)
+        beta_t = _extract_into_tensor(self.betas, t, x.shape)
+        
+        min_val = min_val / sqrt_recip_alpha.max()
+        max_val = max_val / sqrt_recip_alpha.max()
+        
+        total_accept_count = 0
+        total_step_count = 0
+
+        x_opt = x.clone()
+        with th.enable_grad():
+            lamb= 1.0
+            for i in range(steps):
+                if use_energy and steps > 1:
+                    energy, grad = model(x_opt, t, **model_kwargs, return_both=True)
+                else: 
+                    grad = model(x_opt, t, **model_kwargs)
+                
+                x_new = (
+                    x_opt - lamb * beta_t / th.sqrt(1 - alpha_bar_t) * grad
+                )
+                
+                x_new = th.clamp(x_new, min_val, max_val)
+
+                if not use_energy or steps == 1:
+                    return sqrt_recip_alpha * x_new.detach(), 1, 1
+
+                energy_new = model(x_new, t, **model_kwargs, return_energy=True)
+
+                bad_step = (energy_new + 5 > energy).squeeze()
+                accept_count = (~bad_step).sum().item()
+                total_count = bad_step.numel()
+                total_accept_count += accept_count
+                total_step_count += total_count
+
+                x_new[bad_step] = x_opt[bad_step]
+                x_opt = x_new.detach()
+
+                lamb /= 2
+        
+        return sqrt_recip_alpha * x_opt, total_accept_count, total_step_count
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
         assert x_t.shape == eps.shape
@@ -372,6 +518,121 @@ class GaussianDiffusion:
         out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
         out["mean"], _, _ = self.q_posterior_mean_variance(x_start=out["pred_xstart"], x_t=x, t=t)
         return out
+
+
+    def unified_p_sample_loop(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        temperature=1.0,
+        steps=1,
+        use_energy=False,
+    ):
+        total_accept_count = 0
+        total_step_count = 0
+        assert isinstance(shape, (tuple, list))
+        if noise is not None:
+            img = noise
+        else:
+            img = th.randn(*shape).cuda()
+        indices = list(range(self.num_timesteps))[::-1]
+
+        if progress:
+            # Lazy import so that we don't depend on tqdm.
+            from tqdm.auto import tqdm
+
+            indices = tqdm(indices)
+
+        for i in indices:
+            t = th.tensor([i] * shape[0], dtype=th.long).cuda()
+            with th.no_grad():
+                out = self.unified_p_sample(
+                    model,
+                    img,
+                    t,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    cond_fn=cond_fn,
+                    model_kwargs=model_kwargs,
+                    temperature=temperature,
+                    steps=steps,
+                    use_energy=use_energy,
+                )
+                img = out["sample"]
+
+                total_accept_count += out['total_accept_count']
+                total_step_count += out["total_step_count"]
+
+        bsz = shape[0]
+        accept_rate_percent = (total_accept_count / total_step_count) * 100
+        avg_accepted_per_pic = total_accept_count // bsz if bsz > 0 else 0
+        total_steps_per_pic = total_step_count // bsz if bsz > 0 else 0
+        print(f"Energy diffusion accept rate: {avg_accepted_per_pic}/{total_steps_per_pic} steps ({accept_rate_percent:.1f}%) across {bsz} pictures")
+
+        return out['sample']
+
+    def unified_p_sample(
+        self,
+        model,
+        x,
+        t,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        temperature=1.0,
+        steps=1,
+        use_energy=False
+    ):
+        """
+        Sample x_{t-1} from the model at the given timestep.
+        :param model: the model to sample from.
+        :param x: the current tensor at x_{t-1}.
+        :param t: the value of t, starting at 0 for the first diffusion step.
+        :param clip_denoised: if True, clip the x_start prediction to [-1, 1].
+        :param denoised_fn: if not None, a function which applies to the
+            x_start prediction before it is used to sample.
+        :param cond_fn: if not None, this is a gradient function that acts
+                        similarly to the model.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param temperature: temperature scaling during Diff Loss sampling.
+        :return: a dict containing the following keys:
+                 - 'sample': a random sample from the model.
+                 - 'pred_xstart': a prediction of x_0.
+        """
+        out = self.p_mean_variance(
+            model,
+            x,
+            t,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            model_kwargs=model_kwargs,
+            steps=steps,
+            use_energy=use_energy
+        )
+        noise = th.randn_like(x)
+        nonzero_mask = (
+            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+        )  # no noise when t == 0
+        if cond_fn is not None:
+            out["mean"] = self.condition_mean(cond_fn, out, x, t, model_kwargs=model_kwargs)
+        # scale the noise by temperature
+        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["post_log_variance"]) * noise * temperature
+        return {
+            "sample": sample, 
+            "pred_xstart": out["pred_xstart"], 
+            "post_log_variance": out["post_log_variance"],
+            "total_accept_count": out['total_accept_count'],
+            "total_step_count": out["total_step_count"]
+        }
 
     def p_sample(
         self,
@@ -487,6 +748,7 @@ class GaussianDiffusion:
         Returns a generator over dicts, where each dict is the return value of
         p_sample().
         """
+
         assert isinstance(shape, (tuple, list))
         if noise is not None:
             img = noise

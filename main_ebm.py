@@ -60,7 +60,7 @@ def get_args_parser():
                         help='number of autoregressive iterations to generate an image')
     parser.add_argument('--num_images', default=50000, type=int,
                         help='number of images to generate')
-    parser.add_argument('--cfg', default=1.0, type=float, help="classifier-free guidance")
+    parser.add_argument('--cfg', default=0.0, type=float, help="classifier-free guidance")
     parser.add_argument('--cfg_schedule', default="linear", type=str)
     parser.add_argument('--label_drop_prob', default=0.1, type=float)
     parser.add_argument('--eval_freq', type=int, default=40, help='evaluation frequency')
@@ -165,7 +165,9 @@ def get_args_parser():
                         help='[Evaluation] Enable mixed precision (AMP) during evaluation for speedup')
     parser.add_argument('--disable_progress_bar', action='store_true',
                         help='[Evaluation] Disable progress bar during sampling for speedup')
-    
+    parser.add_argument(
+        '--beta_schedule', default='linear', type=str ,help=''
+    )
     parser.add_argument('--grad_accu', default=1, type=int,
                     help='Number of gradient accumulation steps')
     
@@ -233,6 +235,11 @@ def get_args_parser():
         '--use_flow', action='store_true', help='Flag to start flow matching instead of diffusion'
     )
 
+    #eval_ckpt
+    parser.add_argument(
+        '--eval_ckpt', default='', type=str, help=""
+    )
+    
     return parser
 
 
@@ -356,6 +363,7 @@ def main(args):
         always_accept_opt_steps=args.always_accept_opt_steps,
         supervise_energy_landscape=args.supervise_energy_landscape,
         mcmc_step_size=args.mcmc_step_size,
+        beta_schedule=args.beta_schedule,
         mcmc_num_steps=args.mcmc_num_steps,
         linear_then_mean=args.linear_then_mean,
         log_energy_accept_rate=args.log_energy_accept_rate,
@@ -680,6 +688,9 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
+
+    #parse cfg
+    args.cfg += 1.0
     
     # Set default mcmc_step_size_lr_multiplier to 3 times mcmc_step_size if not specified
     if args.mcmc_step_size_lr_multiplier is None:
