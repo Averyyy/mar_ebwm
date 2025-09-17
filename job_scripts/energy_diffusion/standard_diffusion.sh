@@ -2,14 +2,14 @@
 
 #SBATCH --array=0
 #SBATCH --time=48:00:00
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --gpus-per-node=4
 
 ### LOG CONFIG ###
 
-#SBATCH --job-name=SDM-base-effbs_@BZ-lr_@LR_fp32
-#SBATCH --output=logs/slurm/img_256/SDM-base-effbs_@BZ-lr_@LR_fp32%A-%a.log
-RUN_NAME="SDM-base-effbs_@BZ-lr_@LR_fp32"
+#SBATCH --job-name=SDM-base-effbs_@BZ-lr_@LR_fp32_cos_sched
+#SBATCH --output=logs/slurm/img_256/SDM-base-effbs_@BZ-lr_@LR_fp32_cos_sched%A-%a.log
+RUN_NAME="SDM-base-effbs_@BZ-lr_@LR_fp32_cos_sched"
 # NOTE ctrl d ALL THREE of above to modify job-name, output, and RUN_NAME (which should all be the same)
 # MODEL_TYPE="${RUN_NAME%%-*}" # unused for now
 MODEL_SIZE="${RUN_NAME#*-}"; MODEL_SIZE="${MODEL_SIZE%%-*}"
@@ -35,7 +35,7 @@ learning_rates=(0.0001 0.0003 0.00003)
 # --- Set Key Hyperparameters ---
 LR=${learning_rates[$SLURM_ARRAY_TASK_ID]}
 BATCH_SIZE_PER_DEVICE=128
-GRAD_ACCU=2
+GRAD_ACCU=1
 EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE_PER_DEVICE * GRAD_ACCU * NUM_GPUS * NUM_NODES))
 RUN_NAME="${RUN_NAME//@BZ/${EFFECTIVE_BATCH_SIZE}}"; RUN_NAME="${RUN_NAME//@LR/${LR}}"
 echo "RUN_NAME: ${RUN_NAME}"
@@ -48,6 +48,7 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --model_size ${MODEL_SIZE} \
 \
 --diffusion_timesteps 1000 \
+--beta_schedule "cosine" \
 \
 --epochs 1000 \
 --warmup_epochs 10 \
@@ -61,12 +62,12 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --use_cached \
 --cached_path ${IMAGENET1K_CACHE} \
 --cached_format ptshard \
---num_workers 10 \
+--num_workers 9 \
 \
 --output_dir "./logs/output/${RUN_NAME}" \
 --save_last_freq 10 \
 --wandb_entity "ebwm_nlp" \
---wandb_project "energy_diffusion_final" \
+--wandb_project "energy_diffusion_final2" \
 \
 --preview \
 --preview_interval 20 \

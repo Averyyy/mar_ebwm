@@ -7,9 +7,9 @@
 
 ### LOG CONFIG ###
 
-#SBATCH --job-name=EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_100
-#SBATCH --output=logs/slurm/img_256/EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_100%A-%a.log
-RUN_NAME="EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_100"
+#SBATCH --job-name=EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_300_cos_sched
+#SBATCH --output=logs/slurm/img_256/EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_300_cos_sched%A-%a.log
+RUN_NAME="EDM-base-effbs_@BZ-lr_@LR_fp32_egrad_300_cos_sched"
 # NOTE ctrl d ALL THREE of above to modify job-name, output, and RUN_NAME (which should all be the same)
 # MODEL_TYPE="${RUN_NAME%%-*}" # unused for now
 MODEL_SIZE="${RUN_NAME#*-}"; MODEL_SIZE="${MODEL_SIZE%%-*}"
@@ -48,10 +48,10 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --model_size ${MODEL_SIZE} \
 \
 --use_energy \
---mcmc_step_size 0.0001 \
---energy_grad_multiplier 100 \
+--energy_grad_multiplier 300 \
 \
 --diffusion_timesteps 1000 \
+--beta_schedule "cosine" \
 \
 --epochs 1000 \
 --warmup_epochs 10 \
@@ -65,12 +65,12 @@ ${SLURM_ARRAY_TASK_ID:+srun} torchrun --nproc_per_node=${NUM_GPUS} --nnodes=${NU
 --use_cached \
 --cached_path ${IMAGENET1K_CACHE} \
 --cached_format ptshard \
---num_workers 10 \
+--num_workers 9 \
 \
 --output_dir "./logs/output/${RUN_NAME}" \
 --save_last_freq 10 \
 --wandb_entity "ebwm_nlp" \
---wandb_project "energy_diffusion_final" \
+--wandb_project "energy_diffusion_final2" \
 \
 --preview \
 --preview_interval 20 \

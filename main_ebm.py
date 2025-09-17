@@ -309,9 +309,8 @@ def main(args):
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
-        drop_last=False,
+        drop_last=True,
         persistent_workers=True,
-        prefetch_factor=4,
     )
     
     if args.val:
@@ -332,11 +331,10 @@ def main(args):
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
             batch_size=args.val_batch_size,
-            num_workers=args.num_workers,
+            num_workers=int(args.num_workers // 2),
             pin_memory=args.pin_mem,
             drop_last=False,
-            persistent_workers=True,
-            prefetch_factor=8,
+            persistent_workers=False,
         )
     else:
         data_loader_val = None
