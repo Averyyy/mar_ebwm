@@ -16,6 +16,22 @@ import os
 import copy
 import time
 
+from torchvision import transforms, datasets
+from torch.utils.data import Dataset
+
+
+class ImageOnlyDataset(Dataset):
+    def __init__(self, root, transform=None):
+        self.ds = datasets.ImageFolder(root=root, transform=transform)
+        
+    def __len__(self):
+        return len(self.ds)
+    
+    def __getitem__(self, idx):
+        image, _ = self.ds[idx]  # discard label
+        return image
+
+
 import wandb
 
 
@@ -471,7 +487,7 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
                 show_progress = not getattr(args, 'disable_progress_bar', False)
                 sampled_tokens = model_without_ddp.sample_tokens(bsz=batch_size, num_iter=args.num_iter, cfg=cfg,
                                                                  cfg_schedule=args.cfg_schedule, labels=labels_gen,
-                                                                 temperature=args.temperature, progress=show_progress)
+                                                                 temperature=args.temperature, progress=show_progress, steps=1)
                 sampled_images = vae.decode(sampled_tokens / 0.2325)
 
         # measure speed after the first generation batch
@@ -498,7 +514,6 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
             gen_img = np.round(np.clip(sampled_images[b_id].numpy().transpose([1, 2, 0]) * 255, 0, 255))
             gen_img = gen_img.astype(np.uint8)[:, :, ::-1]
             cv2.imwrite(os.path.join(save_folder, '{}.png'.format(str(img_id).zfill(5))), gen_img)
-
     torch.distributed.barrier()
     time.sleep(10)
     
@@ -510,7 +525,13 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
     # Metrics calculations (FID & IS like MAR)
     if log_writer is not None:
         if args.img_size == 256:
-            input2 = None
+            transform = transforms.Compose([
+                transforms.Resize((args.img_size, args.img_size)),  # resize to 256x256
+                transforms.PILToTensor()
+            ])
+
+            input2 = ImageOnlyDataset(root=args.val_data_path, transform=transform)
+            
             fid_statistics_file = 'util/fid_stats/adm_in256_stats.npz'
         else:
             raise NotImplementedError
@@ -523,12 +544,23 @@ def evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=16, log
             isc=True,
             fid=True,
             kid=False,
-            prc=False,
-            verbose=False
+            prc=True,
+            verbose=False,
+            samples_find_deep=True 
         )
 
         fid = metrics_dict['frechet_inception_distance']
         inception_score = metrics_dict['inception_score_mean']
+        precision = metrics_dict['precision']
+        recall = metrics_dict['recall']
+
+        if misc.is_main_process():
+            wandb.log({
+                "FID": fid,
+                "Inception Score": inception_score,
+                "Precision": precision,
+                "Recall": recall,
+            })    
 
         postfix = ""
 
