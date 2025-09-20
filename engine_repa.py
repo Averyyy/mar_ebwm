@@ -99,7 +99,7 @@ def train_probe_onthefly(diff_model, vae, dataloader, layer, num_classes,
         imgs, labels = imgs.to(device), labels.to(device)
         latents = vae.encode(imgs).sample().mul_(0.2325)
         _ = diff_model(latents, torch.zeros(imgs.size(0), dtype=torch.long, device=device), y=labels)
-        featsck = grabber.get()[layer].cpu()
+        feats = grabber.get()[layer].cpu()
         pooled = spatial_pool(feats.numpy(), mode=pool_mode)
         feat_dim = pooled.shape[1]
     grabber.clear()
@@ -118,8 +118,8 @@ def train_probe_onthefly(diff_model, vae, dataloader, layer, num_classes,
         for imgs, labels in tqdm(dataloader, desc=f"train ep{ep} [{layer}]"):
             imgs, labels = imgs.to(device), labels.to(device)
             latents = vae.encode(imgs).sample().mul_(0.2325)
-            with torch.no_grad():
-                _ = diff_model(latents, torch.zeros(imgs.size(0), dtype=torch.long, device=device), y=labels)
+
+            _ = diff_model(latents, torch.zeros(imgs.size(0), dtype=torch.long, device=device), y=labels)
             feats = grabber.get()[layer]
             grabber.clear()
 
@@ -178,7 +178,7 @@ def evaluate_model_representation(diff_model, vae, train_loader, val_loader,
                                   layer_names, device="cuda",
                                   num_classes=1000, linear_epochs=10,
                                   pool_mode="global_mean"):
-    results = {}
+    results = {'linear_probe': {}}
     for layer in layer_names:
         probe = train_probe_onthefly(diff_model, vae, train_loader,
                                      layer, num_classes,
@@ -189,6 +189,5 @@ def evaluate_model_representation(diff_model, vae, train_loader, val_loader,
                                   layer, probe,
                                   device=device,
                                   pool_mode=pool_mode)
-        results[layer] = acc
-    
+        results['linear_probe'][layer] = acc
     return results

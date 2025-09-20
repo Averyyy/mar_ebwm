@@ -295,8 +295,7 @@ def main(args):
         transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
     ])
     dataset_val = datasets.ImageFolder(args.val_data_path, transform=transform_val)
-    dataset_train = datasets.ImageFolder(args.data_path, transform=transform_val)
-    
+    dataset_train = datasets.ImageFolder(args.data_path, transform=transform_val)    
     
     val_loader = DataLoader(dataset_val,
                             batch_size=args.batch_size,
