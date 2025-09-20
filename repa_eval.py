@@ -18,6 +18,7 @@ from engine_repa import evaluate_model_representation
 import wandb
 
 
+
 def safe_load_ckpt(resume_dir):
     return torch.load(resume_dir, map_location='cpu', weights_only=False)
 
@@ -273,8 +274,7 @@ def get_args_parser():
     )
     # repa params
     parser.add_argument('--cknna_k', default=10, type=int, help='')
-    parser.add_argument('--linear_epochs', default=90, type=int, help='')
-    parser.add_argument('--linear_bs', default=128, type=int, help='')
+    parser.add_argument('--linear_epochs', default=2, type=int, help='')
     parser.add_argument('--n_layers', default=4,type=int, help='')
     parser.add_argument('--layers_start_idx', default=2, help='')
     parser.add_argument('--do_cknn', action='store_true', help='')
@@ -295,14 +295,18 @@ def main(args):
         transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
     ])
     dataset_val = datasets.ImageFolder(args.val_data_path, transform=transform_val)
+    dataset_train = datasets.ImageFolder(args.data_path, transform=transform_val)
+    
+    
     val_loader = DataLoader(dataset_val,
                             batch_size=args.batch_size,
                             num_workers=8, pin_memory=True)
 
-    dataset_train = datasets.ImageFolder(args.data_path, transform=transform_val)
+    
     train_loader = DataLoader(dataset_train,
                             batch_size=args.batch_size,
                             num_workers=8, pin_memory=True)
+    
 
     # vae
     vae = AutoencoderKL(embed_dim=args.vae_embed_dim,
@@ -326,23 +330,23 @@ def main(args):
     device = torch.device(device)
     results = evaluate_model_representation(
         diff_model=model.dit,
-        pretrained_encoder=encoder,
-        train_dataloader=train_loader,
-        val_dataloader=val_loader,
+        train_loader=train_loader,
+        val_loader=val_loader,
         vae=vae,
         layer_names=layer_names,
         device=device,
-        cknn_k=args.cknna_k,
+        # cknn_k=args.cknna_k,
         pool_mode='global_mean',
         linear_epochs=args.linear_epochs,
-        linear_bs=args.linear_bs,
-        cknn=args.do_cknn
+        # linear_bs=args.linear_bs,
+        # cknn=args.do_cknn,
     )
 
     print("======== REPA results ========")
     for layer in layer_names:
         lp_acc = results['linear_probe'][layer]
-        cknna = results['cknna'][layer]
+        cknna=None
+        #cknna = results['cknna'][layer]
         print(f"Layer {layer}:  Linear probe acc={lp_acc},  CKNNA={cknna}")
         wandb.log({
                 f"linear_probe/{layer}": lp_acc,
