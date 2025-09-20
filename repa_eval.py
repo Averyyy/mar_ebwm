@@ -1,7 +1,3 @@
-# eval_repa.py
-# Run REPA-style representation evaluations (linear probing + CKNNA)
-# on a trained diffusion model from your training setup.
-
 import os
 import argparse
 import random
@@ -10,13 +6,14 @@ from pathlib import Path
 
 import torch
 import torch.backends.cudnn as cudnn
-from torch.utils.data import DataLoader, Subset
+import torch.distributed as dist
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from torchvision import transforms, datasets
 
 from models.vae import AutoencoderKL
-from engine_repa import evaluate_model_representation 
+from engine_repa import evaluate_model_representation, cache_layers, CachedLatentDataset, train_probe_cached, eval_probe_cached
 import wandb
-
 
 
 def safe_load_ckpt(resume_dir):
@@ -25,13 +22,9 @@ def safe_load_ckpt(resume_dir):
 
 def pick_dit_layers(model, n_layers=4, start_idx=2):
     total_blocks = len(model.blocks)
-
-    # ensure we don't pick before start_idx
     valid_idxs = list(range(start_idx, total_blocks))
     if len(valid_idxs) < n_layers:
         raise ValueError(f"Not enough blocks ({total_blocks}) to pick {n_layers} layers starting from {start_idx}")
-
-    # pick evenly spaced indices
     chosen = np.linspace(start_idx, total_blocks - 1, n_layers, dtype=int)
     return [f"blocks.{i}" for i in chosen]
 
@@ -66,10 +59,28 @@ def load_diffusion_model(args, device):
     if args.resume:
         ckpt = safe_load_ckpt(args.resume)
         model.load_state_dict(ckpt['model'])
-        print(f"✅ Loaded diffusion model from {args.resume}")
+        if dist.get_rank() == 0:
+            print(f"✅ Loaded diffusion model from {args.resume}")
     
     model.to(device)
     return model
+
+
+def init_distributed_mode(args):
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        args.rank = int(os.environ["RANK"])
+        args.world_size = int(os.environ["WORLD_SIZE"])
+        args.gpu = int(os.environ["LOCAL_RANK"])
+    else:
+        print("Not running in distributed mode")
+        args.rank = 0
+        args.world_size = 1
+        args.gpu = 0
+
+    torch.cuda.set_device(args.gpu)
+    dist.init_process_group(backend="nccl", init_method=args.dist_url,
+                            world_size=args.world_size, rank=args.rank)
+    dist.barrier()
 
 
 def get_args_parser():
@@ -157,8 +168,10 @@ def get_args_parser():
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
+    
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
+    parser.add_argument("--rank", default=0, type=int, help="global rank of the process")
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
 
@@ -274,21 +287,23 @@ def get_args_parser():
     )
     # repa params
     parser.add_argument('--cknna_k', default=10, type=int, help='')
-    parser.add_argument('--linear_epochs', default=2, type=int, help='')
+    parser.add_argument('--linear_epochs', default=1, type=int, help='')
     parser.add_argument('--n_layers', default=4,type=int, help='')
-    parser.add_argument('--layers_start_idx', default=2, help='')
-    parser.add_argument('--do_cknn', action='store_true', help='')
-
+    parser.add_argument('--layers_start_idx', default=2, type=int,help='')
+    parser.add_argument('--cache_latents', action='store_true', help='')
+    parser.add_argument('--cache_shard_size', default=2000, type=int,help='')
     return parser
 
 def main(args):
-    device = torch.device(args.device)
+    init_distributed_mode(args)
+    rank = dist.get_rank()
+    device = torch.device(f"cuda:{args.gpu}")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     cudnn.benchmark = True
 
-    # dataloader (val)
+    # dataloaders with DistributedSampler
     transform_val = transforms.Compose([
         transforms.Resize((args.img_size, args.img_size)),
         transforms.ToTensor(),
@@ -296,16 +311,18 @@ def main(args):
     ])
     dataset_val = datasets.ImageFolder(args.val_data_path, transform=transform_val)
     dataset_train = datasets.ImageFolder(args.data_path, transform=transform_val)    
-    
+
+    train_sampler = DistributedSampler(dataset_train, num_replicas=args.world_size, rank=args.rank, shuffle=True)
+    val_sampler = DistributedSampler(dataset_val, num_replicas=args.world_size, rank=args.rank, shuffle=False)
+
+    train_loader = DataLoader(dataset_train,
+                              batch_size=args.batch_size,
+                              sampler=train_sampler,
+                              num_workers=8, pin_memory=True)
     val_loader = DataLoader(dataset_val,
                             batch_size=args.batch_size,
+                            sampler=val_sampler,
                             num_workers=8, pin_memory=True)
-
-    
-    train_loader = DataLoader(dataset_train,
-                            batch_size=args.batch_size,
-                            num_workers=8, pin_memory=True)
-    
 
     # vae
     vae = AutoencoderKL(embed_dim=args.vae_embed_dim,
@@ -317,45 +334,43 @@ def main(args):
     # diffusion model
     model = load_diffusion_model(args, device)
 
-    # pretrained encoder for REPA
-    from transformers import AutoModel
-    encoder = AutoModel.from_pretrained("facebook/dinov2-base")  # returns patch features
-    encoder.to(device).eval()
-
-    # ---------------- run REPA ----------------
-    
+    # pick layers
     layer_names = pick_dit_layers(model.dit, args.n_layers, args.layers_start_idx)
-    print("Layers Used:", layer_names)
-    device = torch.device(device)
-    results = evaluate_model_representation(
-        diff_model=model.dit,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        vae=vae,
-        layer_names=layer_names,
-        device=device,
-        # cknn_k=args.cknna_k,
-        pool_mode='global_mean',
-        linear_epochs=args.linear_epochs,
-        # linear_bs=args.linear_bs,
-        # cknn=args.do_cknn,
-    )
+    if args.rank == 0:
+        print("Layers Used:", layer_names)
 
-    print("======== REPA results ========")
-    for layer in layer_names:
-        lp_acc = results['linear_probe'][layer]
-        cknna=None
-        #cknna = results['cknna'][layer]
-        print(f"Layer {layer}:  Linear probe acc={lp_acc},  CKNNA={cknna}")
-        wandb.log({
-                f"linear_probe/{layer}": lp_acc,
-                f"cknna/{layer}": cknna
-            })
+    # ----------- caching step (optional) -----------
+    if args.cache_latents and args.cached_path:
+        if args.rank == 0:
+            print(f"📦 Caching features to {args.cached_path}")
+        cache_layers(model.dit, vae, train_loader, layer_names, device, args=args, pool_mode="global_mean")
+        cache_layers(model.dit, vae, val_loader, layer_names, device, args=args, pool_mode="global_mean", typ='val')
+        dist.barrier()  # make sure caching finishes everywhere
+        return 
+
+    if rank ==0:
+        train_latent_dataset = CachedLatentDataset(args.cached_path, "train", layer_names)
+        val_latent_dataset   = CachedLatentDataset(args.cached_path, "val", layer_names)
+        
+        train_latent_loader = DataLoader(train_latent_dataset, batch_size=128, shuffle=True)
+        val_latent_loader   = DataLoader(val_latent_dataset, batch_size=128, shuffle=False)
+        num_classes = 1000
+
+        for layer in layer_names:
+            print(f"Training linear probe for layer {layer}...")
+            probe = train_probe_cached(train_latent_loader, layer, num_classes,
+                                                epochs=args.linear_epochs, device=device)
+
+            acc = eval_probe_cached(val_latent_loader, probe, layer, device=device)
+            print(f"[REPA] Layer {layer} validation accuracy: {acc:.4f}")
+            wandb.log({f"linear_probe/{layer}": acc})
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('REPA eval', parents=[get_args_parser()])
     args = parser.parse_args()
-    
-    wandb.init(entity=args.wandb_entity, project=args.wandb_project, name=args.run_name)    
-    main(args)
 
+    if args.rank == 0 or not dist.is_initialized():
+        wandb.init(entity=args.wandb_entity, project=args.wandb_project, name=args.run_name)    
+    args.data_path = os.path.join(args.data_path, 'train')
+    main(args)

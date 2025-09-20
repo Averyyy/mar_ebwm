@@ -14,9 +14,11 @@ fi
 
 # Count number of GPUs
 NUM_GPUS=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
+MASTER_PORT=29610
 
 HYPERPARAMS_FILE=$1
 RESUME_PATH=$2
+CACHE_FLAG=$3
 
 CHECKPOINT_NAME=$(basename "$RESUME_PATH" .pth)
 # Source hyperparameters (pass $1=resume_path, $2=use_energy_flag)
@@ -24,6 +26,12 @@ source "$HYPERPARAMS_FILE" "$RESUME_PATH" "$CFG_VALUE"
 ARGS+=" --evaluate"
 RUN_NAME="${RUN_NAME}_${CHECKPOINT_NAME}"
 ARGS+=" --run_name ${RUN_NAME}"
+ARGS+=" --cached_path /projects/bdjz/sshekhar/cache/${RUN_NAME}"
+
+if [ "$CACHE_FLAG" == "--cache_latents" ]; then
+  ARGS+=" --cache_latents"
+fi
+
 
 # ------------------ Debug Info ------------------
 echo "[INFO] Running evaluation with the following settings:"
@@ -32,6 +40,6 @@ echo "       Num GPUs   : $NUM_GPUS"
 echo "       ARGS       : $ARGS"
 echo "       WANDB       : $WANDB_MODE"
 
-python repa_eval.py ${ARGS}
+torchrun --nproc_per_node=$NUM_GPUS --master_port=$MASTER_PORT repa_eval.py ${ARGS}
 
 
