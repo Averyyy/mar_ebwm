@@ -31,16 +31,7 @@ import copy
 import wandb
 
 def safe_load_ckpt(resume_dir):
-    last  = Path(resume_dir) / 'checkpoint-last.pth'
-    prev  = Path(resume_dir) / 'checkpoint-last-prev.pth'
-    try:
-        return torch.load(last, map_location='cpu', weights_only=False)
-    except Exception as e:
-        print(f"⚠️  {last.name} damaged {e}")
-        if prev.exists():
-            print("↪️  rollback checkpoint-last-prev.pth")
-            return torch.load(prev, map_location='cpu', weights_only=False)
-        raise
+    return torch.load(resume_dir, map_location='cpu', weights_only=False)
 
 def get_args_parser():
     parser = argparse.ArgumentParser('EBM training', add_help=False)
@@ -69,7 +60,7 @@ def get_args_parser():
                         help='number of autoregressive iterations to generate an image')
     parser.add_argument('--num_images', default=50000, type=int,
                         help='number of images to generate')
-    parser.add_argument('--cfg', default=1.0, type=float, help="classifier-free guidance")
+    parser.add_argument('--cfg', default=0.0, type=float, help="classifier-free guidance")
     parser.add_argument('--cfg_schedule', default="linear", type=str)
     parser.add_argument('--label_drop_prob', default=0.1, type=float)
     parser.add_argument('--eval_freq', type=int, default=40, help='evaluation frequency')
@@ -245,7 +236,24 @@ def get_args_parser():
                         help='Enable streaming processing to overlap computation and data transfer for better GPU utilization')
     parser.add_argument('--stream_buffer_size', default=2, type=int,
                         help='Number of CUDA streams to use for streaming processing (default: 2)')
+    
+    parser.add_argument(
+        '--use_flow', action='store_true', help='Flag to start flow matching instead of diffusion'
+    )
 
+    # repa params
+    parser.add_argument('--cknna_k', default=10, type=int, help='')
+    parser.add_argument('--linear_epochs', default=1, type=int, help='')
+    parser.add_argument('--n_layers', default=4,type=int, help='')
+    parser.add_argument('--layers_start_idx', default=2, type=int,help='')
+    parser.add_argument('--cache_latents', action='store_true', help='')
+    parser.add_argument('--cache_shard_size', default=2000, type=int,help='')
+
+    #eval_ckpt
+    parser.add_argument(
+        '--eval_ckpt', default='', type=str, help=""
+    )
+    
     return parser
 
 
@@ -378,34 +386,8 @@ def main(args):
         mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
         energy_gradient_multiplier=args.energy_grad_multiplier,
         zero_init_final_e_layer=args.zero_init_final_e_layer,
+        use_flow=args.use_flow
     )
-        # else: # TODO fix this code is super confusing and wont even work??? redo to be cleaner, remove this branch p sure
-        #     # Fallback to default ebm model 
-        #     from models import EBM
-        #     model = EBM(
-        #         img_size=args.img_size,
-        #         vae_stride=args.vae_stride,
-        #         patch_size=args.patch_size,
-        #         vae_embed_dim=args.vae_embed_dim,
-        #         class_num=args.class_num,
-        #         class_dropout_prob=args.label_drop_prob,
-        #         num_diffusion_timesteps=getattr(args, 'diffusion_timesteps', 1000),
-        #         num_sampling_steps=int(args.num_sampling_steps),
-        #         dit_model=getattr(args, 'dit_model', 'DiT-B/2'),
-        #         use_energy=args.use_energy,
-        #         use_innerloop_opt=args.use_innerloop_opt,
-        #         always_accept_opt_steps=args.always_accept_opt_steps,
-        #         supervise_energy_landscape=args.supervise_energy_landscape,
-        #         mcmc_step_size=args.mcmc_step_size,
-        #         mcmc_num_steps=args.mcmc_num_steps,
-        #         linear_then_mean=args.linear_then_mean,
-        #         log_energy_accept_rate=args.log_energy_accept_rate,
-        #         learnable_mcmc_step_size=args.learnable_mcmc_step_size,
-        #         contrasive_loss_scale=args.contrasive_loss_scale,
-        #         mcmc_refinement_loss_scale=args.mcmc_refinement_loss_scale,
-        #         energy_gradient_multiplier=args.energy_grad_multiplier,
-        #     )
-
     # following timm: set wd as 0 for bias and norm layers
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -436,7 +418,8 @@ def main(args):
 
     # resume training
     is_resuming_checkpoint = False
-    if args.resume and os.path.exists(os.path.join(args.resume, "checkpoint-last.pth")):
+
+    if args.resume:
         checkpoint = safe_load_ckpt(args.resume)
         model_without_ddp.load_state_dict(checkpoint['model'])
         model_params = list(model_without_ddp.parameters())
@@ -656,10 +639,7 @@ def main(args):
             # Main evaluation with primary dtype
             evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
                      cfg=1.0, use_ema=True, global_step=global_step, eval_dtype=eval_dtype)
-            if not (args.cfg == 1.0 or args.cfg == 0.0):
-                evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
-                         log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step, eval_dtype=eval_dtype)
-            
+
             # Auxiliary evaluations with different dtypes
             for i, aux_dtype in enumerate(auxiliary_eval_dtypes):
                 aux_run_info = auxiliary_wandb_run_info[i] if i < len(auxiliary_wandb_run_info) else None
@@ -668,10 +648,7 @@ def main(args):
                 
                 evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz, log_writer=log_writer,
                          cfg=1.0, use_ema=True, global_step=global_step, eval_dtype=aux_dtype, auxiliary_wandb_run_info=aux_run_info)
-                if not (args.cfg == 1.0 or args.cfg == 0.0):
-                    evaluate(model_without_ddp, vae, ema_params, args, epoch, batch_size=args.eval_bsz // 2,
-                             log_writer=log_writer, cfg=args.cfg, use_ema=True, global_step=global_step, eval_dtype=aux_dtype, auxiliary_wandb_run_info=aux_run_info)
-            
+
             torch.cuda.empty_cache()
 
         # Ensure main run is active before training (in case auxiliary evaluations changed wandb.run)
@@ -726,6 +703,9 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
+
+    #parse cfg
+    args.cfg += 1.0
     
     # Set default mcmc_step_size_lr_multiplier to 3 times mcmc_step_size if not specified
     if args.mcmc_step_size_lr_multiplier is None:

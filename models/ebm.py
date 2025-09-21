@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from models.dit import DiT, DiT_models
+from flow_matching.solver.ode_solver import ODESolver
 
 class EBM(nn.Module):
     """
@@ -19,6 +19,11 @@ class EBM(nn.Module):
         # Model architecture
         dit_model="DiT-B/2",
         
+        # Flow paramters
+        use_flow=False,
+        ode_method='heun2',
+        ode_step_size=0.01,
+
         # Diffusion parameters
         num_diffusion_timesteps=1000,
         beta_schedule="linear",
@@ -66,6 +71,7 @@ class EBM(nn.Module):
         self.learnable_mcmc_step_size = learnable_mcmc_step_size
         self.mcmc_num_steps = mcmc_num_steps
         self.learn_sigma = learn_sigma
+        self.use_flow = use_flow
         
         # Create alpha parameter - learnable if specified, otherwise fixed
         if learnable_mcmc_step_size:
@@ -102,7 +108,6 @@ class EBM(nn.Module):
             learn_sigma=learn_sigma,
             diffusion_steps=num_diffusion_timesteps,
         )
-        
         self.gen_diffusion = create_diffusion(
             timestep_respacing=str(num_sampling_steps), # less than during training
             noise_schedule=beta_schedule,
@@ -110,7 +115,12 @@ class EBM(nn.Module):
             learn_sigma=learn_sigma,
             diffusion_steps=num_diffusion_timesteps,
         )
+
+        # Initialize flow
         
+        from flow import create_flow
+        self.train_flow = create_flow(num_diffusion_timesteps, ode_method, ode_step_size)
+
     # ---------------------------- CFG utilities ----------------------------
     def _has_unconditional_embedding(self) -> bool:
         """Return True if LabelEmbedder has an extra unconditional token."""
@@ -133,6 +143,9 @@ class EBM(nn.Module):
         has_uncond = self._has_unconditional_embedding()
 
         def model_fn(x, t, **kwargs):
+            if t.dim() == 0:
+                t = torch.full((x.shape[0],), t, dtype=t.dtype, device=t.device)
+                
             if cfg_scale == 1.0 or not has_uncond:
                 return self.dit(x, t, kwargs.get("y"))
 
@@ -140,48 +153,31 @@ class EBM(nn.Module):
             if B == 0:
                 return self.dit(x, t, kwargs.get("y"))
 
-            # Pad to even batch size if needed
-            pad = (B % 2) == 1
-            if pad:
-                x_pad = torch.cat([x, x[-1:].clone()], dim=0)
-                t_pad = torch.cat([t, t[-1:].clone()], dim=0)
-                y_in = kwargs.get("y")
-                if y_in is None:
-                    y_in = torch.randint(0, self.num_classes, (B,), device=x.device)
-                y_pad = torch.cat([y_in, y_in[-1:].clone()], dim=0)
-            else:
-                x_pad = x
-                t_pad = t
-                y_pad = kwargs.get("y")
-                if y_pad is None:
-                    y_pad = torch.randint(0, self.num_classes, (B,), device=x.device)
+            y_in = kwargs.get("y")
+            if y_in is None:
+                y_in = torch.randint(0, self.num_classes, (B,), device=x.device)
 
-            half = x_pad[: x_pad.shape[0] // 2]
-            x_combined = torch.cat([half, half], dim=0)
+            # Build conditional + unconditional batch
+            x_combined = torch.cat([x, x], dim=0)
+            t_combined = torch.cat([t, t], dim=0)
 
-            y_half = y_pad[: x_pad.shape[0] // 2]
-            y_uncond = torch.full_like(y_half, fill_value=self.num_classes)  # unconditional token index
-            y_combined = torch.cat([y_half, y_uncond], dim=0)
+            y_uncond = torch.full_like(y_in, fill_value=self.num_classes)  # unconditional token
+            y_combined = torch.cat([y_in, y_uncond], dim=0)
 
-            t_half = t_pad[: x_pad.shape[0] // 2]
-            t_combined = torch.cat([t_half, t_half], dim=0)
-
+            # Run DiT
             out = self.dit(x_combined, t_combined, y_combined)
+            # Split cond/uncond parts
+            cond_eps, uncond_eps = torch.split(out, B, dim=0)
 
-            eps, rest = out[:, :3], out[:, 3:]
-            cond_eps, uncond_eps = torch.split(eps, eps.shape[0] // 2, dim=0)
-            guided_half = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-            eps_guided = torch.cat([guided_half, guided_half], dim=0)
-            out_guided = torch.cat([eps_guided, rest], dim=1)
+            # Apply CFG
+            guided_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
 
-            if pad:
-                out_guided = out_guided[:B]
-            return out_guided
+            return guided_eps
 
         return model_fn
 
     
-    def compute_contrastive_loss(self, x, t, labels):
+    def compute_contrastive_loss(self, x, t, labels, **kwargs):
         """
         Compute contrastive energy loss using positive and negative samples.
         
@@ -198,7 +194,10 @@ class EBM(nn.Module):
         
         # Generate negative samples through energy optimization
         x_neg_start = x + 3.0 * torch.randn_like(x)  # Start from perturbed version
-        x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
+        if self.use_flow:
+            x_neg_noisy = self.train_flow.generate_noisy_samples(x, t, noise)
+        else:
+            x_neg_noisy = self.train_diffusion.q_sample(x_start=x_neg_start, t=t, noise=noise)
         
         # Optimize negative samples using energy landscape with detached alpha (no gradient)
         alpha_detached = self.alpha.detach() if hasattr(self, 'alpha') and self.alpha.requires_grad else 0.01
@@ -210,18 +209,26 @@ class EBM(nn.Module):
         else:
             x_neg_opt = opt_result
         
-        # Predict x0 from optimized negative samples
-        alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
-        sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
-        sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
-        
-        # Predict x0 from the optimized noisy sample (reverse of q_sample)
-        x_neg_pred = (x_neg_opt - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_opt)) / sqrt_alpha_cumprod
-        x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
+        if self.use_flow:
+            x_neg_pred = self.train_flow.solve(x_neg_opt, t, labels, **kwargs)
+            x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
+        else:
+            # Predict x0 from optimized negative samples
+            alpha_cumprod = torch.from_numpy(self.train_diffusion.alphas_cumprod).float().to(t.device)[t]
+            sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1)
+            sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod).view(-1, 1, 1, 1)
+            
+            # Predict x0 from the optimized noisy sample (reverse of q_sample)
+            x_neg_pred = (x_neg_opt - sqrt_one_minus_alpha_cumprod * torch.zeros_like(x_neg_opt)) / sqrt_alpha_cumprod
+            x_neg_pred = torch.clamp(x_neg_pred, -2, 2)
         
         # Create new noisy versions for energy computation
-        x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
-        x_neg_noisy_final = self.train_diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
+        if self.use_flow:
+            x_pos_noisy = self.train_flow.generate_noisy_samples(x, t, noise)
+            x_neg_noisy_final = self.train_flow.generate_noisy_samples(x_neg_pred, t, noise)
+        else:
+            x_pos_noisy = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
+            x_neg_noisy_final = self.train_diffusion.q_sample(x_start=x_neg_pred, t=t, noise=noise)
         
         # Compute energy for both positive and negative samples
         x_concat = torch.cat([x_pos_noisy, x_neg_noisy_final], dim=0)
@@ -252,7 +259,11 @@ class EBM(nn.Module):
         """
         # Add opt-step refinement loss that mimics inference process
         noise = torch.randn_like(x)
-        x_noisy_for_opt = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
+        
+        if self.use_flow:
+            x_noisy_for_opt = self.train_flow.generate_noisy_samples(x, t, noise)
+        else:
+            x_noisy_for_opt = self.train_diffusion.q_sample(x_start=x, t=t, noise=noise)
         
         # Apply opt_step with always_accept and get energy differences
         original_always_accept = self.always_accept_opt_steps
@@ -293,14 +304,21 @@ class EBM(nn.Module):
         t = torch.randint(0, self.train_diffusion.num_timesteps, (bsz,), device=x.device)
         
         # Compute diffusion loss (both for standard and energy depending on the self.dit.use_energy)
-        loss_dict = self.train_diffusion.training_losses(
-            model=self.dit,
-            x_start=x,
-            t=t,
-            model_kwargs={"y": labels}
-        ) # has the keys wb, mse, loss by default
-
-        loss_mse = loss_dict["mse"] #TODO need to redo this for when using flow to do 'loss' conditionally
+        if self.use_flow:
+            loss_dict = self.train_flow.training_loss(
+                self.dit, x, t, model_kwargs={'y': labels}
+            )
+            loss_mse = loss_dict["loss"]
+        else:
+            loss_dict = self.train_diffusion.training_losses(
+                model=self.dit,
+                x_start=x,
+                t=t,
+                model_kwargs={"y": labels}
+            )
+            loss_mse = loss_dict["mse"]
+        
+        
         total_loss = loss_mse.clone()
         
         # Optional loss components  
@@ -383,14 +401,15 @@ class EBM(nn.Module):
         if not self.use_energy:
             return x
         
-        # Calculate adaptive steps if not provided
-        if step is None:
-            step = self.get_adaptive_steps(t, keep_grad)
+        # # Calculate adaptive steps if not provided
+        # if step is None:
+        #     step = self.get_adaptive_steps(t, keep_grad)
             
         # Use learnable alpha parameter, with minimal clamping for stability
         # alpha = torch.clamp(self.alpha, min=1e-10, max=10.0) if step_size is None else step_size
-        alpha = self.alpha if step_size is None else step_size
-        # print(f"🔧 opt_step: steps={step}, alpha={alpha.item():.2e} (raw_alpha={self.alpha.item():.2e})")
+        #alpha = self.alpha if step_size is None else step_size
+        alpha = step_size
+            # print(f"🔧 opt_step: steps={step}, alpha={alpha.item():.2e} (raw_alpha={self.alpha.item():.2e})")
         
         # Initialize tracking
         total_accept_count = 0
@@ -412,11 +431,11 @@ class EBM(nn.Module):
                     x_new = x_opt + alpha * gradients.float()  # Gradient ascent for training
                 else:
                     x_new = x_opt - alpha * gradients.float()  # Gradient descent for inference
-                
-                # Use generation schedule's alphas_cumprod to match sampling timesteps
-                alpha_cumprod = torch.from_numpy(self.gen_diffusion.alphas_cumprod).float().to(t.device)[t]
-                max_val = torch.sqrt(alpha_cumprod).view(-1, 1, 1, 1) * 2.0
-                x_new = torch.clamp(x_new, -max_val, max_val)
+                    
+                #Use generation schedule's alphas_cumprod to match sampling timesteps
+                # sqrt_alpha_cumprod = _extract_into_tensor(self.gen_diffusion.sqrt_alphas_cumprod, t, (1,))[0].item()
+                # max_val =  alpha_cumprod * 2.0
+                # x_new = torch.clamp(x_new, -max_val, max_val)
                 
                 # Check if energy decreased, if not, reject the step (unless always_accept_opt_steps is True)
                 if not (self.use_innerloop_opt and self.always_accept_opt_steps):
@@ -460,7 +479,10 @@ class EBM(nn.Module):
         """
         device = next(self.dit.parameters()).device
         bsz = labels.shape[0]
+
+        step_sizes = self.gen_diffusion.betas / (1 - self.gen_diffusion.alphas_cumprod) / 1000
         
+
         # Initialize with noise
         x = torch.randn(bsz, *shape, device=device)
         
@@ -477,7 +499,7 @@ class EBM(nn.Module):
             timesteps_iter = enumerate(tqdm(timesteps, desc="Sampling", leave=False))
         else:
             timesteps_iter = enumerate(timesteps)
-            
+        
         # Select model used by diffusion at each step (with or without CFG)
         model_for_sampling = self._make_cfg_model(cfg) if cfg != 1.0 else self.dit
 
@@ -490,26 +512,26 @@ class EBM(nn.Module):
                     model_for_sampling,
                     x,
                     t, 
-                    model_kwargs={"y": labels}
+                    model_kwargs={"y": labels},
+                    clip_denoised=True
                 )
                 x = out["sample"]
-            
+
             if self.use_energy and self.use_innerloop_opt:
                 # Use adaptive steps - automatically adjusts based on timestep and inference context
                 if self.log_energy_accept_rate:
-                    x, accept_count, step_count = self.opt_step(x, t, labels, step=None)
+                    x, accept_count, step_count = self.opt_step(x, t, labels, step=1, step_size=step_sizes[t_val])
                     total_accept_count += accept_count
                     total_step_count += step_count
                 else:
-                    x = self.opt_step(x, t, labels, step=None)
-        
+                    x = self.opt_step(x, t, labels, step=1, step_size=step_sizes[t_val])
+
         # Log overall accept rates after sampling completes
         if self.log_energy_accept_rate and total_step_count > 0:
             accept_rate_percent = (total_accept_count / total_step_count) * 100
             avg_accepted_per_pic = total_accept_count // bsz if bsz > 0 else 0
             total_steps_per_pic = total_step_count // bsz if bsz > 0 else 0
             print(f"Energy diffusion accept rate: {avg_accepted_per_pic}/{total_steps_per_pic} steps ({accept_rate_percent:.1f}%) across {bsz} pictures")
-            
             # Log to wandb if available and run_name is set
             try:
                 import wandb
@@ -521,7 +543,7 @@ class EBM(nn.Module):
                     })
             except (ImportError, AttributeError):
                 pass  # wandb not available or not initialized
-                
+
         return x
     
     def sample_tokens(
@@ -533,7 +555,8 @@ class EBM(nn.Module):
         labels=None, 
         temperature=1.0,  # Ignored
         progress=False,
-        gt_prefix_tokens=None,  # Ignored
+        gt_prefix_tokens=None,  # Ignored,
+        steps=1,
         **kwargs
     ):
         """
@@ -559,7 +582,7 @@ class EBM(nn.Module):
         
         # Sample noise
         latent_size = self.img_size // self.vae_stride
-        shape = (bsz, self.vae_embed_dim, latent_size, latent_size)
+        shape = [bsz, self.vae_embed_dim, latent_size, latent_size]
         
         if cfg != 1.0:
             if self.use_energy and self.use_innerloop_opt:
@@ -578,15 +601,22 @@ class EBM(nn.Module):
                     print(f"🔀 Using CFG sampling (cfg={cfg}) - Energy sampling DISABLED")
                     model_for_sampling = self._make_cfg_model(cfg)
 
-                samples = self.gen_diffusion.p_sample_loop(
-                    model=model_for_sampling,
-                    shape=shape,
-                    clip_denoised=True,
-                    model_kwargs={"y": labels},
-                    cond_fn=None,
-                    device=device,
-                    progress=progress,
-                )
+                if self.use_flow:
+                    samples = torch.randn(shape, device=device)
+                    samples = self.train_flow.solve(
+                        samples, 999, labels, model=model_for_sampling
+                    )
+                
+                else:
+                    samples = self.gen_diffusion.p_sample_loop(
+                        model=model_for_sampling,
+                        shape=shape,
+                        clip_denoised=True,
+                        model_kwargs={"y": labels},
+                        cond_fn=None,
+                        device=device,
+                        progress=progress,
+                    )
         else:
             # Check if we need energy-aware sampling
             if self.use_energy and self.use_innerloop_opt:
@@ -600,15 +630,45 @@ class EBM(nn.Module):
             else:
                 # Use gen_diffusion with reduced timesteps
                 print(f"📝 Using STANDARD sampling (use_energy={self.use_energy}, use_innerloop_opt={self.use_innerloop_opt})")
-                samples = self.gen_diffusion.p_sample_loop(
-                    model=self.dit,
-                    shape=shape,
-                    clip_denoised=True,
-                    model_kwargs={"y": labels},
-                    cond_fn=None,
-                    device=device,
-                    progress=progress,
-                )
+                
+                # samples = self.gen_diffusion.p_sample_loop(
+                #     model=self.dit,
+                #     shape=shape,
+                #     clip_denoised=True,
+                #     model_kwargs={"y": labels},
+                #     cond_fn=None,
+                #     use_inner_opt=False,
+                #     progress=True,
+                #     device=device
+                # )
+                # samples = self.gen_diffusion.unified_p_sample_loop(
+                #     model=self.dit,
+                #     shape=shape,
+                #     clip_denoised=True,
+                #     model_kwargs={"y": labels},
+                #     cond_fn=None,
+                #     device=device,
+                #     progress=progress,
+                #     steps=steps,
+                #     use_energy=self.use_energy
+                # )
+                if self.use_flow:
+                    samples = torch.randn(shape, device=device)
+                    samples = self.train_flow.solve(
+                        samples, 999, labels, model=self.dit
+                    )
+                else:
+                    samples = self.gen_diffusion.p_sample_loop(
+                        model=self.dit,
+                        shape=shape,
+                        clip_denoised=False,
+                        model_kwargs={"y": labels},
+                        cond_fn=None,
+                        device=device,
+                        progress=progress,
+                    )
+
+
         return samples
 
 
