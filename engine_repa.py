@@ -12,43 +12,89 @@ from sklearn.metrics import accuracy_score
 import torch.distributed as dist
 from torch.utils.data import Dataset
 from glob import glob
+import gc
 
 # -----------------------
 # Cache Loader
 # -----------------------
 
-import os, glob, torch
+import torch
 from torch.utils.data import Dataset
+import glob
+import os
+import numpy as np
+from typing import List, Dict, Tuple
+
+import torch
+from torch.utils.data import Dataset
+import glob
+import os
+import numpy as np
+from typing import List, Dict, Tuple
+import gc
 
 class CachedLatentDataset(Dataset):
-    def __init__(self, cache_dir, split, layer_names):
-        files = sorted(glob.glob(f"{cache_dir}/{split}/layer_rank*_shard*.pt"))
+    """
+    Memory-efficient, batch-friendly dataset for cached layer features stored in sharded *.pt files.
 
+    Uses an LRU cache to keep only `max_shards_in_ram` shards in memory.
+    """
+
+    def __init__(self, cache_dir: str, split: str, layer_names: List[str], max_shards_in_ram: int = 4):
+        super().__init__()
         self.layer_names = layer_names
-        self.samples = {ln: [] for ln in layer_names}
-        self.labels = []
+        self.max_shards_in_ram = max_shards_in_ram
 
-        # load all shards
-        for f in files:
-            data = torch.load(f, map_location="cpu")
-            for ln in layer_names:
-                self.samples[ln].append(data[ln])
-            self.labels.append(data["labels"])
+        # Find all shard files
+        self.shard_paths = sorted(glob.glob(f"{cache_dir}/{split}/layer_rank*_shard*.pt"))
+        if len(self.shard_paths) == 0:
+            raise RuntimeError(f"No layer shard files found under {cache_dir}/{split}")
 
-        # concatenate everything
-        self.samples = {ln: torch.cat(self.samples[ln], dim=0) for ln in layer_names}
-        self.labels = torch.cat(self.labels, dim=0)
+        # Build prefix sum of shard lengths without loading full tensors
+        self._shard_sizes = []
+        for p in self.shard_paths:
+            hdr = torch.load(p, map_location="cpu", mmap=True)
+            self._shard_sizes.append(hdr["labels"].numel())
+            del hdr
+        self._cum_sizes = np.cumsum([0] + self._shard_sizes)
+
+        # LRU cache for loaded shards
+        self._cache: Dict[int, Dict[str, torch.Tensor]] = {}
+        self._lru: List[int] = []
 
     def __len__(self):
-        return self.labels.size(0)
+        return self._cum_sizes[-1]
 
-    def __getitem__(self, idx):
-        """
-        Returns:
-            dict {layer_name: feature_tensor}, label
-        """
-        features = {ln: self.samples[ln][idx] for ln in self.layer_names}
-        label = self.labels[idx]
+    def _get_shard(self, shard_idx: int) -> Dict[str, torch.Tensor]:
+        """Load shard into RAM if not cached, evict oldest if cache full."""
+        if shard_idx in self._cache:
+            # update LRU
+            self._lru.remove(shard_idx)
+            self._lru.append(shard_idx)
+            return self._cache[shard_idx]
+
+        # load shard from disk
+        shard = torch.load(self.shard_paths[shard_idx], map_location="cpu")
+        self._cache[shard_idx] = shard
+        self._lru.append(shard_idx)
+
+        # evict oldest if cache is full
+        if len(self._lru) > self.max_shards_in_ram:
+            old = self._lru.pop(0)
+            del self._cache[old]
+            gc.collect()
+        return shard
+
+    def __getitem__(self, idx: int) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        # locate shard
+        shard_idx = int(np.searchsorted(self._cum_sizes, idx, side="right") - 1)
+        local_idx = idx - self._cum_sizes[shard_idx]
+
+        shard = self._get_shard(shard_idx)
+
+        # fetch features for all layers in a single slice
+        features = {ln: shard[ln][local_idx] for ln in self.layer_names}
+        label = shard["labels"][local_idx]
         return features, label
 
 # -----------------------
@@ -285,7 +331,7 @@ def evaluate_model_representation(diff_model, vae, train_loader, val_loader,
     return results
 
 
-def cache_layers(diff_model, vae, data_loader, layer_names, device, args=None, pool_mode="global_mean", typ="train"):
+def cache_layers(diff_model, vae, data_loader, layer_names, device, args=None, t=0, pool_mode="global_mean", typ="train"):
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     os.makedirs(os.path.join(args.cached_path, typ), exist_ok=True)
@@ -301,10 +347,9 @@ def cache_layers(diff_model, vae, data_loader, layer_names, device, args=None, p
 
     for step, (imgs, labels) in enumerate(tqdm(data_loader, desc=f"Rank {rank} caching")):
         imgs, labels = imgs.to(device), labels.to(device)
-
         with torch.no_grad():
             latents = vae.encode(imgs).sample().mul_(0.2325)
-            _ = diff_model(latents, torch.zeros(imgs.size(0), dtype=torch.long, device=device), y=labels)
+            _ = diff_model(latents, torch.full((imgs.size(0),), t, dtype=torch.long, device=device), y=torch.full((imgs.size(0),), 1000, dtype=torch.long, device=device))
             feats = grabber.get()
             grabber.clear()
 
@@ -321,12 +366,18 @@ def cache_layers(diff_model, vae, data_loader, layer_names, device, args=None, p
             shard_id += 1
             shard_features = {ln: [] for ln in layer_names}
             shard_labels = []
-        dist.barrier() 
+            del save_dict
+            gc.collect()
+
+            dist.barrier() 
+
     if shard_labels:
         save_dict = {ln: torch.cat(shard_features[ln]) for ln in layer_names}
         save_dict["labels"] = torch.cat(shard_labels)
         save_path = os.path.join(args.cached_path, f'{typ}', f"layer_rank{rank:02d}_shard{shard_id:05d}.pt")
         torch.save(save_dict, save_path)
+        del save_dict
+        gc.collect
 
     grabber.remove()
     dist.barrier() 

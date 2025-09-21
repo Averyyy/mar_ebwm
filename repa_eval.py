@@ -292,6 +292,8 @@ def get_args_parser():
     parser.add_argument('--layers_start_idx', default=2, type=int,help='')
     parser.add_argument('--cache_latents', action='store_true', help='')
     parser.add_argument('--cache_shard_size', default=2000, type=int,help='')
+    parser.add_argument('--timestep_to_eval', default=0, type=int, help='')
+
     return parser
 
 def main(args):
@@ -338,13 +340,12 @@ def main(args):
     layer_names = pick_dit_layers(model.dit, args.n_layers, args.layers_start_idx)
     if args.rank == 0:
         print("Layers Used:", layer_names)
-
     # ----------- caching step (optional) -----------
     if args.cache_latents and args.cached_path:
         if args.rank == 0:
             print(f"📦 Caching features to {args.cached_path}")
-        cache_layers(model.dit, vae, train_loader, layer_names, device, args=args, pool_mode="global_mean")
-        cache_layers(model.dit, vae, val_loader, layer_names, device, args=args, pool_mode="global_mean", typ='val')
+        cache_layers(model.dit, vae, train_loader, layer_names, device, args=args, t=args.timestep_to_eval, pool_mode="global_mean")
+        cache_layers(model.dit, vae, val_loader, layer_names, device, args=args, t=args.timestep_to_eval, pool_mode="global_mean", typ='val')
         dist.barrier()  # make sure caching finishes everywhere
         return 
 
@@ -352,7 +353,7 @@ def main(args):
         train_latent_dataset = CachedLatentDataset(args.cached_path, "train", layer_names)
         val_latent_dataset   = CachedLatentDataset(args.cached_path, "val", layer_names)
         
-        train_latent_loader = DataLoader(train_latent_dataset, batch_size=128, shuffle=True)
+        train_latent_loader = DataLoader(train_latent_dataset, batch_size=128, shuffle=False)
         val_latent_loader   = DataLoader(val_latent_dataset, batch_size=128, shuffle=False)
         num_classes = 1000
 
