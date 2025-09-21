@@ -21,7 +21,7 @@ class EBM(nn.Module):
         
         # Flow paramters
         use_flow=False,
-        ode_method='huen2',
+        ode_method='heun2',
         ode_step_size=0.01,
 
         # Diffusion parameters
@@ -137,6 +137,9 @@ class EBM(nn.Module):
         has_uncond = self._has_unconditional_embedding()
 
         def model_fn(x, t, **kwargs):
+            if t.dim() == 0:
+                t = torch.full((x.shape[0],), t, dtype=t.dtype, device=t.device)
+                
             if cfg_scale == 1.0 or not has_uncond:
                 return self.dit(x, t, kwargs.get("y"))
 
@@ -584,15 +587,22 @@ class EBM(nn.Module):
                     print(f"🔀 Using CFG sampling (cfg={cfg}) - Energy sampling DISABLED")
                     model_for_sampling = self._make_cfg_model(cfg)
 
-                samples = self.gen_diffusion.p_sample_loop(
-                    model=model_for_sampling,
-                    shape=shape,
-                    clip_denoised=True,
-                    model_kwargs={"y": labels},
-                    cond_fn=None,
-                    device=device,
-                    progress=progress,
-                )
+                if self.use_flow:
+                    samples = torch.randn(shape, device=device)
+                    samples = self.train_flow.solve(
+                        samples, 999, labels, model=model_for_sampling
+                    )
+                
+                else:
+                    samples = self.gen_diffusion.p_sample_loop(
+                        model=model_for_sampling,
+                        shape=shape,
+                        clip_denoised=True,
+                        model_kwargs={"y": labels},
+                        cond_fn=None,
+                        device=device,
+                        progress=progress,
+                    )
         else:
             # Check if we need energy-aware sampling
             if self.use_energy and self.use_innerloop_opt:
@@ -628,15 +638,21 @@ class EBM(nn.Module):
                 #     steps=steps,
                 #     use_energy=self.use_energy
                 # )
-                samples = self.gen_diffusion.p_sample_loop(
-                    model=self.dit,
-                    shape=shape,
-                    clip_denoised=True,
-                    model_kwargs={"y": labels},
-                    cond_fn=None,
-                    device=device,
-                    progress=progress,
-                )
+                if self.use_flow:
+                    samples = torch.randn(shape, device=device)
+                    samples = self.train_flow.solve(
+                        samples, 999, labels, model=self.dit
+                    )
+                else:
+                    samples = self.gen_diffusion.p_sample_loop(
+                        model=self.dit,
+                        shape=shape,
+                        clip_denoised=False,
+                        model_kwargs={"y": labels},
+                        cond_fn=None,
+                        device=device,
+                        progress=progress,
+                    )
 
 
         return samples

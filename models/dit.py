@@ -48,6 +48,7 @@ class TimestepEmbedder(nn.Module):
         :return: an (N, D) Tensor of positional embeddings.
         """
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
+
         half = dim // 2
         freqs = torch.exp(
             -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
@@ -298,6 +299,8 @@ class DiT(nn.Module):
         return_energy: Return only energy (for energy mode)
         return_both: Return both energy and gradients (for energy mode)
         """
+        if t.dim() == 0:
+            t = torch.full((x.shape[0],), t, dtype=t.dtype, device=t.device)
         if self.use_energy:
             # For energy mode, we need gradients even during sampling
             with torch.enable_grad():

@@ -13,3 +13,5 @@ core
 .vscode/
 
 CLAUDE.md
+dump/
+logs1/

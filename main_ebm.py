@@ -235,6 +235,14 @@ def get_args_parser():
         '--use_flow', action='store_true', help='Flag to start flow matching instead of diffusion'
     )
 
+    # repa params
+    parser.add_argument('--cknna_k', default=10, type=int, help='')
+    parser.add_argument('--linear_epochs', default=1, type=int, help='')
+    parser.add_argument('--n_layers', default=4,type=int, help='')
+    parser.add_argument('--layers_start_idx', default=2, type=int,help='')
+    parser.add_argument('--cache_latents', action='store_true', help='')
+    parser.add_argument('--cache_shard_size', default=2000, type=int,help='')
+
     #eval_ckpt
     parser.add_argument(
         '--eval_ckpt', default='', type=str, help=""
