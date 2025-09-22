@@ -381,6 +381,6 @@ if __name__ == "__main__":
         '--eval_ckpt', default='', type=str, help=""
     )
     
-
     args = parser.parse_args()
+    args.cfg += 1.0
     main(args)
