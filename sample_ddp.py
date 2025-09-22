@@ -14,8 +14,6 @@ For a simple single-GPU/CPU sampling script, see sample.py.
 import torch
 import torch.distributed as dist
 from models import ebm
-from download import find_model
-from diffusion_eval import create_diffusion
 from models.vae import AutoencoderKL
 from tqdm import tqdm
 import os
