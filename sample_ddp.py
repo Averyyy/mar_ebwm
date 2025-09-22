@@ -143,7 +143,7 @@ def main(args):
 
         samples = diffusion.p_sample_loop(
             sample_fn, z.shape, z,
-            clip_denoised=False, model_kwargs=model_kwargs,
+            clip_denoised=True, model_kwargs=model_kwargs,
             progress=False, device=device
         )
         if using_cfg:
