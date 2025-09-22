@@ -84,6 +84,8 @@ def build_folder_name(args):
 
 def main():
     args = parse_args()
+    args.cfg += 1
+
 
     folder_name = build_folder_name(args)
     sample_folder_dir = os.path.join(args.sample_dir, folder_name)
