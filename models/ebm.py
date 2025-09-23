@@ -99,8 +99,7 @@ class EBM(nn.Module):
             raise ValueError(f"Unknown DiT model: {dit_model}")
         
         print(f"using diffusion params sigma_small:{sigma_small}, learn_sigma:{learn_sigma}, beta_schedule:{beta_schedule}")
-
-        from diffusion import create_diffusion
+        from diffusion_eval import create_diffusion
         self.train_diffusion = create_diffusion(
             timestep_respacing="",  # Full timesteps during training
             noise_schedule=beta_schedule,
@@ -145,7 +144,7 @@ class EBM(nn.Module):
         def model_fn(x, t, **kwargs):
             if t.dim() == 0:
                 t = torch.full((x.shape[0],), t, dtype=t.dtype, device=t.device)
-                
+
             if cfg_scale == 1.0 or not has_uncond:
                 return self.dit(x, t, kwargs.get("y"))
 
@@ -604,7 +603,7 @@ class EBM(nn.Module):
                 if self.use_flow:
                     samples = torch.randn(shape, device=device)
                     samples = self.train_flow.solve(
-                        samples, 999, labels, model=model_for_sampling
+                        samples, 999, labels, model=model_for_sampling ########## TODO
                     )
                 
                 else:
@@ -641,33 +640,42 @@ class EBM(nn.Module):
                 #     progress=True,
                 #     device=device
                 # )
-                # samples = self.gen_diffusion.unified_p_sample_loop(
-                #     model=self.dit,
-                #     shape=shape,
-                #     clip_denoised=True,
-                #     model_kwargs={"y": labels},
-                #     cond_fn=None,
-                #     device=device,
-                #     progress=progress,
-                #     steps=steps,
-                #     use_energy=self.use_energy
-                # )
+                
                 if self.use_flow:
                     samples = torch.randn(shape, device=device)
                     samples = self.train_flow.solve(
-                        samples, 999, labels, model=self.dit
+                        samples, 999, labels, model=self.dit ######## TODO
                     )
                 else:
-                    samples = self.gen_diffusion.p_sample_loop(
-                        model=self.dit,
-                        shape=shape,
-                        clip_denoised=False,
-                        model_kwargs={"y": labels},
-                        cond_fn=None,
-                        device=device,
-                        progress=progress,
-                    )
-
+                    tmp = False
+                    if tmp:
+                        print("#"*30)
+                        print("Using Standard unified_p_sample_loop")
+                        print("#"*30)
+                        samples = self.gen_diffusion.unified_p_sample_loop(
+                            model=self.dit,
+                            shape=shape,
+                            clip_denoised=True,
+                            model_kwargs={"y": labels},
+                            cond_fn=None,
+                            device=device,
+                            progress=progress,
+                            steps=steps,
+                            use_energy=self.use_energy
+                        )
+                    else:
+                        print("#"*30)
+                        print("Using Standard p_sample_loop")
+                        print("#"*30)
+                        samples = self.gen_diffusion.p_sample_loop(
+                            model=self.dit,
+                            shape=shape,
+                            clip_denoised=False,
+                            model_kwargs={"y": labels},
+                            cond_fn=None,
+                            device=device,
+                            progress=progress,
+                        )
 
         return samples
 

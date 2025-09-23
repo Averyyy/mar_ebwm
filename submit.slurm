@@ -30,5 +30,9 @@
 
 # Arguments: $1=resume_path
 # bash evaluate.sh "$@"
-bash dit_gen_images.sh "$@"
 
+# TODO set task here properly
+
+# bash dit_gen_images.sh "$@"
+
+bash metrics.sh "$@"
