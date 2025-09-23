@@ -29,4 +29,6 @@
 # module load anaconda
 
 # Arguments: $1=resume_path
-bash evaluate.sh "$@"
+# bash evaluate.sh "$@"
+bash dit_gen_images.sh "$@"
+
