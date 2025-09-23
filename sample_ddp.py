@@ -21,6 +21,7 @@ from PIL import Image
 import numpy as np
 import math
 import argparse
+from diffusion_eval import create_diffusion
 
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
@@ -96,7 +97,13 @@ def main(args):
 
     model = ebm_model.dit
     model.eval()
-    diffusion = ebm_model.gen_diffusion
+    diffusion = create_diffusion(
+        timestep_respacing=args.num_sampling_steps,
+        noise_schedule=args.beta_schedule,
+        sigma_small=args.sigma_small,
+        learn_sigma=False,
+        diffusion_steps=args.diffusion_timesteps,
+    )
 
     # Load VAE
     vae = AutoencoderKL(embed_dim=args.vae_embed_dim,
@@ -381,6 +388,11 @@ if __name__ == "__main__":
         '--eval_ckpt', default='', type=str, help=""
     )
     
+    parser.add_argument(
+        '--sigma_small', action='store_true', help='',
+    )
+
+
     args = parser.parse_args()
     args.cfg += 1.0
     main(args)
